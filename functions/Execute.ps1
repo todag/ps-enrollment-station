@@ -60,7 +60,7 @@
                 # Hide secrets from output
                 #
                 $syncHash.result.stdout = Hide-Secrets -String $syncHash.result.stdout
-                $syncHash.result.stderr = Hide-Secrets -String $syncHash.result.stderr
+                $syncHash.result.stderr = Hide-Secrets -String $syncHash.result.stderr                
                 $arguments = Hide-Secrets -String $arguments
             }
             Catch {

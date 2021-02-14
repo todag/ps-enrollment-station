@@ -48,9 +48,8 @@ function Show-MainWindow(){
         }
     }
 
-    $MainWindow.Window.add_ContentRendered( {
-        $cards = Get-SmartCards
-        $MainWindow.lstReaders.ItemsSource = $cards
+    $MainWindow.Window.add_ContentRendered( {        
+        $MainWindow.lstReaders.ItemsSource = Get-SmartCards
     })
 
     $MainWindow.ReloadCardsButton.Add_Click({

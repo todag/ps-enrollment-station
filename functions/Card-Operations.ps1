@@ -1,18 +1,23 @@
-﻿function Get-Readers() {
+﻿
+function Get-Readers() {
     <#
     .SYNOPSIS
         Returns a list of connected smart card readers
     #>
-    $r = Execute -ExeFile $script:ykman -desc "Getting readers" -arguments "list --readers"
+    $r = Execute -ExeFile $script:ykman -desc "Getting readers" -arguments "list --readers" -NoThrow
+    if(-not $r.ExitCode -eq 0) {
+        Write-Log -LogString "Error getting readers!" -Severity Critical
+        return ,$null
+    }
     $readers = New-Object Collections.Generic.List[String]
     foreach($line in $r.stdout.Split([Environment]::NewLine)) {
         if(-Not [string]::IsNullOrWhiteSpace($line)) {
             $readers.Add($line.Trim()) | Out-Null
         }
     }
+    Write-Log -LogString "Found $($readers.Count) reader(s)" -Severity Notice
     return ,$readers
 }
-
 function Get-SmartCards() {
     <#
     .SYNOPSIS
@@ -20,6 +25,16 @@ function Get-SmartCards() {
     #>
     $cards = New-Object Collections.Generic.List[PSCustomObject]
     foreach($reader in (Get-Readers)) {
+
+        if(-not ($reader -match "yubico|yubikey")) {
+            Write-Log -LogString "Skipping incompatible reader $reader" -Severity Debug
+            $cards.Add([PSCustomObject]@{
+                Reader          = $reader
+                DeviceType      = $reader
+                CardOk          = $false
+            })
+            continue
+        }
 
         $readerInfo = Execute -ExeFile $script:ykman -desc "Reading card in reader $reader" -arguments ('--reader "' + $reader + '" info') -NoThrow
 
@@ -70,7 +85,6 @@ function Get-SmartCards() {
                     Not_after   = $slot9c.Groups[7].Value.Trim()
                 }
             })
-
         }
         else {
             $cards.Add([PSCustomObject]@{
