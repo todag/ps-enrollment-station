@@ -46,7 +46,7 @@ function Get-SmartCards() {
             $slot9a = ([regex]::Match($pivInfo.stdout, 'Slot 9a:\s+Algorithm:\s+(.*)\s+Subject DN:\s+(.*)\s+Issuer DN:\s+(.*)\s+Serial:\s+(.*)\s+Fingerprint:\s+(.*)\s+Not before:\s+(.*)\s+Not after:\s+(.*)'))
             $slot9c = ([regex]::Match($pivInfo.stdout, 'Slot 9c:\s+Algorithm:\s+(.*)\s+Subject DN:\s+(.*)\s+Issuer DN:\s+(.*)\s+Serial:\s+(.*)\s+Fingerprint:\s+(.*)\s+Not before:\s+(.*)\s+Not after:\s+(.*)'))
 
-            Write-Host "ReaderInfo: $($readerInfo.stdout)"
+            Write-Log -LogString "Reader piv info:`n $($readerInfo.stdout)" -Severity Debug
             $cards.Add([PSCustomObject]@{
                 Reader          = $reader
                 DeviceType      = ([regex]::Match($readerInfo.stdout, 'Device type:\s(.*)').Groups[1].Value -replace "`n", "" -replace "`r", "")
@@ -113,6 +113,10 @@ function Generate-Key() {
         The keys touch policy
     .PARAMETER PinPolicy
         The keys pin policy
+    .PARAMETER Slot
+        The Slot to generate the key in
+    .PARAMETER OutputFile
+        The file to save the public key to
     #>
     param(
        [Parameter(Mandatory=$true)]  [PSCustomObject]$Card,
@@ -121,15 +125,16 @@ function Generate-Key() {
        [Parameter(Mandatory=$false)] [string]$KeyAlgo = "RSA2048",
        [Parameter(Mandatory=$false)] [string]$TouchPolicy = "CACHED",
        [Parameter(Mandatory=$false)] [string]$PinPolicy = "ALWAYS",
-       [Parameter(Mandatory=$true)]  [string]$Slot
+       [Parameter(Mandatory=$true)]  [string]$Slot,
+       [Parameter(Mandatory=$true)]  [string]$OutputFile
     )
-    Execute -ExeFile $script:ykman -desc "Generating $KeyAlgo key in slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-key -P $Pin -m $mgmtKey -a $KeyAlgo --pin-policy $PinPolicy --touch-policy $TouchPolicy $slot $($script:workDir)\pubkey.pem"
+    Execute -ExeFile $script:ykman -desc "Generating $KeyAlgo key in slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-key -P $Pin -m $mgmtKey -a $KeyAlgo --pin-policy $PinPolicy --touch-policy $TouchPolicy $slot $OutputFile"
 }
 
 function Generate-Csr() {
     <#
     .SYNOPSIS
-        Generates a signed csr with the key in the slow
+        Generates a signed csr with the key in the slot
     .PARAMETER Card
         The smart card object to perform the operation on
     .PARAMETER Pin
@@ -140,16 +145,19 @@ function Generate-Csr() {
         Which keyslot to use to sign the csr
     .PARAMETER PubKeyPath
         Path to the public key (optional)
+    .PARAMETER OutputFile
+        File to save the CSR to
     #>
     param(
         [Parameter(Mandatory=$true)] [PSCustomObject]$Card,
         [Parameter(Mandatory=$true)] [string]$PIN,
         [Parameter(Mandatory=$true)] [string]$Subject,
         [Parameter(Mandatory=$true)] [string]$Slot,
-        [Parameter(Mandatory=$false)] [string]$PubKeyPath = "$($script:workDir)\pubkey.pem"
+        [Parameter(Mandatory=$true)] [string]$PubKeyFile,
+        [Parameter(Mandatory=$true)] [string]$OutputFile
 
     )
-    Execute -ExeFile $script:ykman -desc "Generating CSR from slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-csr -P $pin -s $subject $slot $($script:workDir)\pubkey.pem $($script:workDir)\pubkey.csr"
+    Execute -ExeFile $script:ykman -desc "Generating CSR from slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-csr -P $pin -s $subject $slot $PubKeyFile $OutputFile"
 }
 
 function Reset-Piv() {
@@ -290,11 +298,28 @@ function Import-Certificate() {
         The certfile to import (optional)
     #>
     param(
-       [Parameter(Mandatory=$true)]  [PSCustomObject]$Card,
-       [Parameter(Mandatory=$true)]  [string]$Pin,
-       [Parameter(Mandatory=$false)] [string]$mgmtKey = "010203040506070801020304050607080102030405060708",
-       [Parameter(Mandatory=$true)]  [string]$Slot,
-       [Parameter(Mandatory=$false)]  [string]$CertFile = "$($script:workDir)\cert.crt"
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Card,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Pin,
+
+        [Parameter(Mandatory=$false)]
+        [string]$mgmtKey = "010203040506070801020304050607080102030405060708",
+
+        [Parameter(Mandatory=$true)]
+        [string]$Slot,
+
+        [Parameter(Mandatory=$true, ParameterSetName="A")]
+        [string]$CertFile = "$($script:workDir)\cert.crt",
+
+        [Parameter(Mandatory=$true, ParameterSetName="B")]
+        [string]$CertBase64
     )
+
+    if($CertBase64) {
+        Set-Content "$($script:workDir)\$($Card.SerialNumber).$Slot.crt" -Value $CertBase64
+        $CertFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.crt"
+    }
     Execute -ExeFile $script:ykman -desc "Importing certificate to slot $Slot" -arguments "--device $($Card.SerialNumber) piv import-certificate -P $pin -m $mgmtKey -v $slot $CertFile"
 }

@@ -86,7 +86,12 @@
         <TextBlock Grid.Column="0" Grid.Row="6" Text="Current PIN"/>
         <PasswordBox Grid.Column="2" Grid.Row="6" Name="pwdPin" HorizontalAlignment="Left"/>
 
-        <Button Grid.Column="2" Grid.Row="8" Name="btnEnroll" Content="Retrieve" Width="90" HorizontalAlignment="Right"/>
+        <StackPanel Grid.Column="2" Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Retrieve" Width="90"/>
+            <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
+        </StackPanel>
+
+
     </Grid>
 
 

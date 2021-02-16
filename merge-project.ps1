@@ -4,7 +4,7 @@
 #   Offers option to sign the resulting file if a code signing
 #   certificate is found.
 #
-#   This is just a quick hack...
+#   This is just a quick (and ugly) hack...
 #
 ###############################################################################
 
@@ -42,7 +42,6 @@ function Add-XAML
     $xamlFiles = @{
         xaml_MainWindow = "MainWindow.xaml"
         xaml_EnrollWindow = "EnrollWindow.xaml"
-        xaml_AdvReqWindow = "AdvReqWindow.xaml"
         xaml_RequestPendingWindow = "RequestPendingWindow.xaml"
         xaml_FindUsersWindow = "FindUsersWindow.xaml"
         xaml_CardOperationsWindow = "CardOperationsWindow.xaml"

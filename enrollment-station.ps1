@@ -1,5 +1,5 @@
 Set-StrictMode -Version 2.0
-$appVersion = "0.1 - 2020-02-13"
+$appVersion = "0.2 - 2020-02-16"
 $appAbout = @"
 Enrollment Station v $($appVersion)
 
@@ -11,17 +11,16 @@ https://materialdesignicons.com/
 "@
 
 Write-Host ("::Loading enrollment-station v" + $appVersion)
+$ErrorActionPreference = "Stop"
 
 #
 # ---------------------- Script scope variables ----------------------
 #
 $script:ykman = "C:\Program Files\Yubico\YubiKey Manager\ykman.exe"
-$script:certreq = "C:\Windows\system32\certreq.exe"
 $script:workDir = "$($env:APPDATA)\ps-enrollment-station"
 $script:hideSecrets = $true
-$script:ShowVerboseOutput = $true
 $script:ShowDebugOutput = $true
-$script:ca = "DC01.AD.LOCAL\AD-DC01-CA"
+$script:ca = (New-Object -ComObject CertificateAuthority.Config).GetConfig(0)
 
 #
 # Load Required assemblies
@@ -37,7 +36,7 @@ Add-Type -Name Window -Namespace Console -MemberDefinition '
         '
 
 Write-Host ("Done!") -ForegroundColor Green
-If(!(Test-Path $script:workDir)) {
+if(!(Test-Path $script:workDir)) {
     New-Item -ItemType Directory -Force -Path $script:workDir | Out-Null
 }
 
@@ -57,7 +56,6 @@ Get-ChildItem -Path "$($PSScriptRoot)\functions\*.ps1" -Exclude $($MyInvocation.
 #
 [xml]$xaml_MainWindow = Get-Content -Path "$($PSScriptRoot)\resources\MainWindow.xaml"
 [xml]$xaml_EnrollWindow = Get-Content -Path "$($PSScriptRoot)\resources\EnrollWindow.xaml"
-[xml]$xaml_AdvReqWindow = Get-Content -Path "$($PSScriptRoot)\resources\AdvReqWindow.xaml"
 [xml]$xaml_RequestPendingWindow = Get-Content -Path "$($PSScriptRoot)\resources\RequestPendingWindow.xaml"
 [xml]$xaml_FindUsersWindow = Get-Content -Path "$($PSScriptRoot)\resources\FindUsersWindow.xaml"
 [xml]$xaml_CardOperationsWindow = Get-Content -Path "$($PSScriptRoot)\resources\CardOperationsWindow.xaml"

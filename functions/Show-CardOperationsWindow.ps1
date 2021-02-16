@@ -34,10 +34,9 @@ function Show-CardOperationsWindow(){
             Validate-Pin -Pin1 $Win.pwdChangePinPin1.Password -Pin2 $Win.pwdChangePinPin2.Password
             $Win.Window.Close()
             Set-Pin -Card $Card -CurrentPin $Win.pwdChangePinPin.Password -NewPin $Win.pwdChangePinPin1.Password
-            Set-ResultText -Success "PIN Changed on $($Card.DeviceType)"
+            [System.Windows.MessageBox]::Show("PIN Changed on $($Card.DeviceType)", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PIN Change failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PIN Change failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
@@ -46,10 +45,9 @@ function Show-CardOperationsWindow(){
             Validate-Puk -Puk1 $Win.pwdChangePukPuk1.Password -Puk2 $Win.pwdChangePukPuk2.Password
             $Win.Window.Close()
             Set-Puk -Card $Card -CurrentPuk $Win.pwdChangePukPuk.Password -NewPuk $Win.pwdChangePukPuk1.Password
-            Set-ResultText -Success "PUK Changed on $($Card.DeviceType)"
+            [System.Windows.MessageBox]::Show("PUK Changed on $($Card.DeviceType)", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PUK Change failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PUK Change failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
@@ -58,25 +56,23 @@ function Show-CardOperationsWindow(){
             Validate-Pin -Pin1 $Win.pwdUnblockPinPin1.Password -Pin2 $Win.pwdUnblockPinPin1.Password
             $Win.Window.Close()
             Unblock-Pin -Card $Card -CurrentPuk $Win.pwdUnblockPinPuk.Password -NewPin $Win.pwdUnblockPinPin1.Password
-            Set-ResultText -Success "PIN Unblocked and changed on $($Card.DeviceType)"
+            [System.Windows.MessageBox]::Show("PIN Unblocked and changed on $($Card.DeviceType)", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PIN Unblock failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PIN Unblock failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
     $Win.btnResetPiv.Add_Click({
-        if(([System.Windows.Forms.MessageBox]::Show("This will reset the PIV application, continue?","Warning",1,48)) -ne 'Ok') {
+        if(([System.Windows.Forms.MessageBox]::Show("This will reset the PIV application, continue?`n`nWarning! All keys will be lost!","Warning",1,48)) -ne 'Ok') {
             return
         }
 
         try{
             $Win.Window.Close()
             Reset-Piv -Card $Card
-            Set-ResultText -Success "PIV on $($Card.DeviceType) reset successfully"
+            [System.Windows.MessageBox]::Show("PIV on $($Card.DeviceType) reset successfully", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PIV reset failed on card $($Card.DeviceType)"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PIV reset failed on card $(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 

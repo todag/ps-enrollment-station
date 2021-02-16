@@ -2,7 +2,8 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     x:Name="EnrollWindow"
-    Title="" Height="325" Width="425">
+    SizeToContent="WidthAndHeight"
+    Title="" MinHeight="325" MinWidth="425">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="VisCon"/>
@@ -45,7 +46,6 @@
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="Margin" Value="0,2,0,2"/>
         </Style>
-
     </Window.Resources>
 
     <Grid Name="EnrollGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowEnrollGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
@@ -67,11 +67,23 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="8"/>
         </Grid.RowDefinitions>
-        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Enroll new card" FontSize="16"/>
+        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Enroll certificate" FontSize="16"/>
         <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
 
-        <TextBlock Grid.Column="0" Grid.Row="3" Text="Template"/>
+        <TextBlock Grid.Column="0" Grid.Row="2" Text="Enrollment template"/>
+        <ComboBox Grid.Column="2" Grid.Row="2" SelectedIndex="0" Name="cmbRequestType">
+            <ComboBoxItem Content="Wipe and enroll new card" Name="cmbiNewCard" Tag="newcard"/>
+            <ComboBoxItem Content="Advanced enrollment" Name="cmbiAdvRequest" Tag="advrequest"/>
+        </ComboBox>
+        <TextBlock Grid.Column="0" Grid.Row="3" Text="Certificate Template"/>
         <ComboBox Grid.Column="2" Grid.Row="3" Name="cmbTemplates" DisplayMemberPath="DisplayName"/>
 
         <TextBlock Grid.Column="0" Grid.Row="5" Text="Signing certificate" FontSize="12" Name="EnrollSigningCertTextBlock">
@@ -95,25 +107,74 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBox Grid.Column="0" Name="txtSubject" IsReadOnly="True" HorizontalAlignment="Stretch"/>
-
             <Button Grid.Column="1" Height="25" Width="25" HorizontalAlignment="Right" VerticalAlignment="Top" Name="btnShowFindUsersWindow" ToolTip="Find user" Background="Transparent" Margin="2,2,0,2">
                 <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource searchIcon}"/>
             </Button>
         </Grid>
 
-        <TextBlock Grid.Column="0" Grid.Row="7" Text="Key Touch Policy"/>
-        <ComboBox Grid.Column="2" Grid.Row="7"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
-            <ComboBoxItem Content="ALWAYS"/>
-            <ComboBoxItem Content="NEVER"/>
-            <ComboBoxItem Content="CACHED"/>
+        <!-- Only Show if Advanced request-->
+        <TextBlock Grid.Column="0" Grid.Row="7" Text="Reset PIV" Name="txtResetPiv" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <CheckBox Grid.Column="2" Grid.Row="7" Name="chkReset" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="8" Text="Set CCID only mode" Name="txtSetMode" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <CheckBox Grid.Column="2" Grid.Row="8" Name="chkSetCCIDOnlyMode" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+
+
+        <TextBlock Grid.Column="0" Grid.Row="9" Text="Target Slot" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="9" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="Slot 9a: PIV Authentication" Tag="9a"/>
+            <ComboBoxItem Content="Slot 9c: Digital Signature" Tag="9c"/>
+            <ComboBoxItem Content="Slot 9d: Key Management" Tag="9d"/>
+            <ComboBoxItem Content="Slot 9e: Card Authentication" Tag="9e"/>
+            <ComboBoxItem Content="Slot f9: Attestation" Tag="f9"/>
         </ComboBox>
 
-        <TextBlock Grid.Column="0" Grid.Row="8" Text="New PIN"/>
-        <PasswordBox Grid.Column="2" Grid.Row="8" Name="pwdPin1" HorizontalAlignment="Left"/>
+        <TextBlock Grid.Column="0" Grid.Row="10" Text="Key Algorithm" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="10"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyAlgo" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="TDES" Tag="TDES"/>
+            <ComboBoxItem Content="RSA1024" Tag="RSA1024"/>
+            <ComboBoxItem Content="RSA2048" Tag="RSA2048"/>
+            <ComboBoxItem Content="ECCP256" Tag="ECCP256"/>
+            <ComboBoxItem Content="ECCP384" Tag="ECCP384"/>
+        </ComboBox>
 
-        <TextBlock Grid.Column="0" Grid.Row="9" Text="New PIN (Again)"/>
-        <PasswordBox Grid.Column="2" Grid.Row="9" Name="pwdPin2" HorizontalAlignment="Left"/>
+        <TextBlock Grid.Column="0" Grid.Row="11" Text="Key Touch Policy"/>
+        <ComboBox Grid.Column="2" Grid.Row="11"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
+            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
+            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
+            <ComboBoxItem Content="CACHED" Tag="CACHED"/>
+        </ComboBox>
 
-        <ToggleButton Grid.Column="2" Grid.Row="10" Name="btnEnroll" Content="Enroll" Width="90" HorizontalAlignment="Right"/>
+        <TextBlock Grid.Column="0" Grid.Row="12" Text="Key PIN Policy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="12"  HorizontalAlignment="Stretch" SelectedIndex="0" Name="cmbKeyPinPolicy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="DEFAULT" Tag="DEFAULT"/>
+            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
+            <ComboBoxItem Content="ONCE" Tag="ONCE"/>
+            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
+        </ComboBox>
+
+        <TextBlock Grid.Column="0" Grid.Row="13" Text="Current PIN" Name="txtCurrentPin">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding ElementName=chkReset, Path=IsChecked}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <PasswordBox Grid.Column="2" Grid.Row="13" Name="pwdCurrentPin" HorizontalAlignment="Left" Visibility="{Binding ElementName=txtCurrentPin, Path=Visibility}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="14" Text="New PIN" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="14" Name="pwdNewPin1" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="15" Text="New PIN (Again)" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="15" Name="pwdNewPin2" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+
+        <StackPanel Orientation="Horizontal" Grid.Column="2" HorizontalAlignment="Right" Grid.Row="16" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Enroll" Width="90"/>
+            <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
+        </StackPanel>
     </Grid>
 </Window>

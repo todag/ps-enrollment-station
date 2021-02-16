@@ -30,6 +30,6 @@ function Show-FindUsersWindow() {
 
     if($FindUsersWindow.OkButton.IsChecked)
     {
-        return "$((Get-WmiObject Win32_NTDOMAIN).DomainName)\$(($FindUsersWindow.DataGrid.SelectedItem).samAccountName)"
+        return "$((Get-WmiObject Win32_NTDOMAIN).DomainName)\$(($FindUsersWindow.DataGrid.SelectedItem).samAccountName)".Trim()
     }
 }

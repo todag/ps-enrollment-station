@@ -1,5 +1,5 @@
 Set-StrictMode -Version 2.0
-$appVersion = "0.1 - 2020-02-13"
+$appVersion = "0.2 - 2020-02-16"
 $appAbout = @"
 Enrollment Station v $($appVersion)
 
@@ -11,6 +11,7 @@ https://materialdesignicons.com/
 "@
 
 Write-Host ("::Loading enrollment-station v" + $appVersion)
+$ErrorActionPreference = "Stop"
 
 #
 # ---------------------- Script scope variables ----------------------
@@ -19,9 +20,8 @@ $script:ykman = "C:\Program Files\Yubico\YubiKey Manager\ykman.exe"
 $script:certreq = "C:\Windows\system32\certreq.exe"
 $script:workDir = "$($env:APPDATA)\ps-enrollment-station"
 $script:hideSecrets = $true
-$script:ShowVerboseOutput = $true
 $script:ShowDebugOutput = $true
-$script:ca = "DC01.AD.LOCAL\AD-DC01-CA"
+$script:ca = (New-Object -ComObject CertificateAuthority.Config).GetConfig(0)
 
 #
 # Load Required assemblies
@@ -37,26 +37,31 @@ Add-Type -Name Window -Namespace Console -MemberDefinition '
         '
 
 Write-Host ("Done!") -ForegroundColor Green
-If(!(Test-Path $script:workDir)) {
+if(!(Test-Path $script:workDir)) {
     New-Item -ItemType Directory -Force -Path $script:workDir | Out-Null
 }
 
 #region Functions
+
 function Get-Readers() {
     <#
     .SYNOPSIS
         Returns a list of connected smart card readers
     #>
-    $r = Execute -ExeFile $script:ykman -desc "Getting readers" -arguments "list --readers"
+    $r = Execute -ExeFile $script:ykman -desc "Getting readers" -arguments "list --readers" -NoThrow
+    if(-not $r.ExitCode -eq 0) {
+        Write-Log -LogString "Error getting readers!" -Severity Critical
+        return ,$null
+    }
     $readers = New-Object Collections.Generic.List[String]
     foreach($line in $r.stdout.Split([Environment]::NewLine)) {
         if(-Not [string]::IsNullOrWhiteSpace($line)) {
             $readers.Add($line.Trim()) | Out-Null
         }
     }
+    Write-Log -LogString "Found $($readers.Count) reader(s)" -Severity Notice
     return ,$readers
 }
-
 function Get-SmartCards() {
     <#
     .SYNOPSIS
@@ -64,6 +69,16 @@ function Get-SmartCards() {
     #>
     $cards = New-Object Collections.Generic.List[PSCustomObject]
     foreach($reader in (Get-Readers)) {
+
+        if(-not ($reader -match "yubico|yubikey")) {
+            Write-Log -LogString "Skipping incompatible reader $reader" -Severity Debug
+            $cards.Add([PSCustomObject]@{
+                Reader          = $reader
+                DeviceType      = $reader
+                CardOk          = $false
+            })
+            continue
+        }
 
         $readerInfo = Execute -ExeFile $script:ykman -desc "Reading card in reader $reader" -arguments ('--reader "' + $reader + '" info') -NoThrow
 
@@ -75,7 +90,7 @@ function Get-SmartCards() {
             $slot9a = ([regex]::Match($pivInfo.stdout, 'Slot 9a:\s+Algorithm:\s+(.*)\s+Subject DN:\s+(.*)\s+Issuer DN:\s+(.*)\s+Serial:\s+(.*)\s+Fingerprint:\s+(.*)\s+Not before:\s+(.*)\s+Not after:\s+(.*)'))
             $slot9c = ([regex]::Match($pivInfo.stdout, 'Slot 9c:\s+Algorithm:\s+(.*)\s+Subject DN:\s+(.*)\s+Issuer DN:\s+(.*)\s+Serial:\s+(.*)\s+Fingerprint:\s+(.*)\s+Not before:\s+(.*)\s+Not after:\s+(.*)'))
 
-            Write-Host "ReaderInfo: $($readerInfo.stdout)"
+            Write-Log -LogString "Reader piv info:`n $($readerInfo.stdout)" -Severity Debug
             $cards.Add([PSCustomObject]@{
                 Reader          = $reader
                 DeviceType      = ([regex]::Match($readerInfo.stdout, 'Device type:\s(.*)').Groups[1].Value -replace "`n", "" -replace "`r", "")
@@ -114,7 +129,6 @@ function Get-SmartCards() {
                     Not_after   = $slot9c.Groups[7].Value.Trim()
                 }
             })
-
         }
         else {
             $cards.Add([PSCustomObject]@{
@@ -143,6 +157,10 @@ function Generate-Key() {
         The keys touch policy
     .PARAMETER PinPolicy
         The keys pin policy
+    .PARAMETER Slot
+        The Slot to generate the key in
+    .PARAMETER OutputFile
+        The file to save the public key to
     #>
     param(
        [Parameter(Mandatory=$true)]  [PSCustomObject]$Card,
@@ -151,15 +169,16 @@ function Generate-Key() {
        [Parameter(Mandatory=$false)] [string]$KeyAlgo = "RSA2048",
        [Parameter(Mandatory=$false)] [string]$TouchPolicy = "CACHED",
        [Parameter(Mandatory=$false)] [string]$PinPolicy = "ALWAYS",
-       [Parameter(Mandatory=$true)]  [string]$Slot
+       [Parameter(Mandatory=$true)]  [string]$Slot,
+       [Parameter(Mandatory=$true)]  [string]$OutputFile
     )
-    Execute -ExeFile $script:ykman -desc "Generating $KeyAlgo key in slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-key -P $Pin -m $mgmtKey -a $KeyAlgo --pin-policy $PinPolicy --touch-policy $TouchPolicy $slot $($script:workDir)\pubkey.pem"
+    Execute -ExeFile $script:ykman -desc "Generating $KeyAlgo key in slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-key -P $Pin -m $mgmtKey -a $KeyAlgo --pin-policy $PinPolicy --touch-policy $TouchPolicy $slot $OutputFile"
 }
 
 function Generate-Csr() {
     <#
     .SYNOPSIS
-        Generates a signed csr with the key in the slow
+        Generates a signed csr with the key in the slot
     .PARAMETER Card
         The smart card object to perform the operation on
     .PARAMETER Pin
@@ -170,16 +189,19 @@ function Generate-Csr() {
         Which keyslot to use to sign the csr
     .PARAMETER PubKeyPath
         Path to the public key (optional)
+    .PARAMETER OutputFile
+        File to save the CSR to
     #>
     param(
         [Parameter(Mandatory=$true)] [PSCustomObject]$Card,
         [Parameter(Mandatory=$true)] [string]$PIN,
         [Parameter(Mandatory=$true)] [string]$Subject,
         [Parameter(Mandatory=$true)] [string]$Slot,
-        [Parameter(Mandatory=$false)] [string]$PubKeyPath = "$($script:workDir)\pubkey.pem"
+        [Parameter(Mandatory=$true)] [string]$PubKeyFile,
+        [Parameter(Mandatory=$true)] [string]$OutputFile
 
     )
-    Execute -ExeFile $script:ykman -desc "Generating CSR from slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-csr -P $pin -s $subject $slot $($script:workDir)\pubkey.pem $($script:workDir)\pubkey.csr"
+    Execute -ExeFile $script:ykman -desc "Generating CSR from slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-csr -P $pin -s $subject $slot $PubKeyFile $OutputFile"
 }
 
 function Reset-Piv() {
@@ -320,59 +342,111 @@ function Import-Certificate() {
         The certfile to import (optional)
     #>
     param(
-       [Parameter(Mandatory=$true)]  [PSCustomObject]$Card,
-       [Parameter(Mandatory=$true)]  [string]$Pin,
-       [Parameter(Mandatory=$false)] [string]$mgmtKey = "010203040506070801020304050607080102030405060708",
-       [Parameter(Mandatory=$true)]  [string]$Slot,
-       [Parameter(Mandatory=$false)]  [string]$CertFile = "$($script:workDir)\cert.crt"
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$Card,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Pin,
+
+        [Parameter(Mandatory=$false)]
+        [string]$mgmtKey = "010203040506070801020304050607080102030405060708",
+
+        [Parameter(Mandatory=$true)]
+        [string]$Slot,
+
+        [Parameter(Mandatory=$true, ParameterSetName="A")]
+        [string]$CertFile = "$($script:workDir)\cert.crt",
+
+        [Parameter(Mandatory=$true, ParameterSetName="B")]
+        [string]$CertBase64
     )
+
+    if($CertBase64) {
+        Set-Content "$($script:workDir)\$($Card.SerialNumber).$Slot.crt" -Value $CertBase64
+        $CertFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.crt"
+    }
     Execute -ExeFile $script:ykman -desc "Importing certificate to slot $Slot" -arguments "--device $($Card.SerialNumber) piv import-certificate -P $pin -m $mgmtKey -v $slot $CertFile"
 }
-function Request-Certificate() {
+function Request-Certificate()
+{
     <#
     .SYNOPSIS
         Requests a certificate from the CA
     .PARAMETER CertTemplate
         The custom CertTemplate object to use for the request
     .PARAMETER CsrFile
-        The csr file to use in the request
-    .PARAMETER CertFile
+        The CSR file to use for the request
+    .PARAMETER OutputFile
         The file to save the certificate to
     .PARAMETER Id
         Id of pending request
+    .PARAMETER ConfigString
+        The CA config string ie hostname\ca-name
     #>
     param(
-        [Parameter(Mandatory=$true,  ParameterSetName="A")]  [PSCustomObject]$CertTemplate,
-        [Parameter(Mandatory=$false, ParameterSetName="A")] [string]$CsrFile = "$($script:workDir)\pubkey.csr",
-        [Parameter(Mandatory=$false, ParameterSetName="A")] [string]$CertFile = "$($script:workDir)\cert.crt",
-        [Parameter(Mandatory=$false, ParameterSetName="B")] [string]$Id
+        [Parameter(Mandatory=$true,  ParameterSetName="A")]
+        [PSCustomObject]$CertTemplate,
+
+        [Parameter(Mandatory=$true, ParameterSetName="A")]
+        [string]$CsrFile,
+
+        [Parameter(Mandatory=$false, ParameterSetName="A")]
+        [Parameter(Mandatory=$false, ParameterSetName="B")]
+        [string]$OutputFile,
+
+        [Parameter(Mandatory=$false, ParameterSetName="B")]
+        [string]$Id,
+
+        [Parameter(Mandatory=$false, ParameterSetName="A")]
+        [Parameter(Mandatory=$false, ParameterSetName="B")]
+        [string]$ConfigString = $script:ca
     )
-    if($Id) {
-        $result = Execute -ExeFile $script:certreq -desc "Retrieving certificate id $Id from CA" -arguments "-config $script:ca -retrieve -f $id $($script:workDir)\cert.crt"
-    } else {
-        $result = Execute -ExeFile $script:certreq -desc "Requesting certificate from CA" -arguments "-config $script:ca -submit -f -attrib CertificateTemplate:$($certTemplate.Name) $CsrFile $CertFile"
+
+    $r = [PSCustomObject]@{
+        Base64 = $null
+        ReturnCode = $null
+        Pending_Id = $null
+        Id = $null
     }
 
-    if(($result.ExitCode -eq 0) -and ($result.stdout -like "*Certificate request is pending: Taken Under Submission*")) {
-        $requestId = [regex]::Match($result.stdout, 'RequestId:\s"(.*)"').Groups[1].Value
+    # https://docs.microsoft.com/en-us/windows/win32/api/certcli/nn-certcli-icertrequest
+    # https://docs.microsoft.com/en-us/windows/win32/api/certcli/nf-certcli-icertrequest-submit
+    # CR_IN_ENCODEANY = 0xff
 
-        $r = [PSCustomObject]@{
-                pending = $true
-                id = $requestId
+    $CertRequest = New-Object -ComObject CertificateAuthority.Request
+    if(-not $Id) {
+        Write-Log -LogString "Requesting certificate. Template $($CertTemplate.Name) Csr: $CsrFile" -Severity Debug
+        $csrData = Get-Content $CsrFile
+        $requestStatus = $CertRequest.Submit(0xff,$csrData,"CertificateTemplate:$($CertTemplate.Name)", $ConfigString)
+        $r.ReturnCode = $requestStatus
+        Write-Log -LogString "Request status: $requestStatus" -Severity Debug
+        if($requestStatus -eq 3) {
+            $r.Base64 = $CertRequest.GetCertificate(0)
+            if($OutputFile) {
+                Set-Content $OutputFile -Value $r.Base64
             }
-
-        if ([string]::IsNullOrEmpty($requestId)) {
-            throw " Unable to extract request id!"
-        } else {
-            Write-Log -LogString "Request is pending with id: $requestId" -Severity Notice
-            return ,$r
+        } elseif($requestStatus -eq 5) {
+            $r.Id = $CertRequest.GetRequestId()
         }
     } else {
-        $r = [PSCustomObject]@{
-                pending = $false
+        $requestStatus = $CertRequest.RetrievePending($Id, $ConfigString)
+        Write-Log -LogString "Request status: $requestStatus" -Severity Debug
+        $r.ReturnCode = $requestStatus
+        if($requestStatus -eq 3) {
+            $r.Base64 = $CertRequest.GetCertificate(0)
+            if($OutputFile) {
+                Set-Content $OutputFile -Value $r.Base64
             }
-        return ,$r
+        }
     }
+
+    if($r.ReturnCode -eq 0) { Write-Log -LogString ":: ReturnCode 0 foreign certificate" -Severity Debug }
+    if($r.ReturnCode -eq 2) { Write-Log -Logstring ":: ReturnCode 2 request denied " -Severity Debug }
+    if($r.ReturnCode -eq 3) { Write-Log -LogString ":: ReturnCode 3 certificate issued" -Severity Debug }
+    if($r.ReturnCode -eq 5) { Write-Log -LogString ":: ReturnCode 5 request pending" -Severity Debug }
+    if($r.ReturnCode -eq 6) { Write-Log -LogString ":: ReturnCode 6 certificate revoked" -Severity Debug }
+
+    return ,$r
 }
 
 function Get-SigningCertificates() {
@@ -398,30 +472,51 @@ function Get-SigningCertificates() {
 function Sign-CertificateRequest() {
     <#
     .SYNOPSIS
-        Signs a request with an enrollment agent certificate
+        Wraps the CSR in a signed CMC CSR
     .PARAMETER SigningCertificateThumbprint
         Thumbprint of the signing certificate
     .PARAMETER Subject
         Subject of the request (ie. ad\username)
+        !! Seems to only work in the ad\username format
     .PARAMETER CertTemplate
         Custom certificate template object used for the inner request
     .PARAMETER CsrFile
         The csr file to sign
     #>
     param(
-        [Parameter(Mandatory=$true)]  [string]$SigningCertificateThumbprint,
-        [Parameter(Mandatory=$true)]  [string]$Subject,
-        [Parameter(Mandatory=$true)]  [PSCustomObject]$CertTemplate,
-        [Parameter(Mandatory=$false)]  [string]$CsrFile = "$($script:workDir)\pubkey.csr"
+        [Parameter(Mandatory=$true)]
+        [string]$SigningCertificateThumbprint,
+
+        [Parameter(Mandatory=$true)]
+        [string]$Subject,
+
+        [Parameter(Mandatory=$true)]
+        [PSCustomObject]$CertTemplate,
+
+        [Parameter(Mandatory=$true, ParameterSetName="A")]
+        [string]$CsrInputFile,
+
+        [Parameter(Mandatory=$true, ParameterSetName="B")]
+        [string]$CsrInputBase64,
+
+        [Parameter(Mandatory=$true, ParameterSetName="A")]
+        [string]$CsrOutputFile
+
     )
     if($CertTemplate.RequiredSignatures -lt 1) {
         Write-Log -LogString "Template does not need Enrollment Agent signing" -Severity Notice
         return
     }
 
-    Write-Log -LogString "Signing $CsrFile for subject $subject. Signing cert thumbprint: $SigningCertificateThumbprint" -Severity Debug
+    Write-Log -LogString "Signing $CsrInputFile for subject $subject. Signing cert thumbprint: $SigningCertificateThumbprint" -Severity Debug
+    if($CsrInputFile) {
+        $csrInput = Get-Content -LiteralPath $CsrInputFile
+    } else {
+        $csrInput = $CsrInputBase64
+    }
+    Write-Log -LogString "CSR Input: `n$csrInput" -Severity Debug
     $csrData = [string]::Empty
-    foreach($line in (Get-Content -LiteralPath $CsrFile)) {
+    foreach($line in ($csrInput -split "`r`n")) {
         if((-not $line.StartsWith("-----")) -and ($line.Length -gt 0)) {
             $csrData = $csrData + $line + [Environment]::NewLine
         }
@@ -433,14 +528,17 @@ function Sign-CertificateRequest() {
     $cmcRequest.InitializeFromInnerRequestTemplateName($pkcs10request, $($certTemplate.Name));
     $cmcRequest.RequesterName = $Subject
     $signerCertificate = New-Object -ComObject X509Enrollment.CSignerCertificate
+    #$signerCertificate.UIContextMessage = ""
     $signerCertificate.Initialize(0,0,0xc,$SigningCertificateThumbprint)
     $cmcRequest.SignerCertificate = $signerCertificate
+    #$cmcRequest.UIContextMessage = ""
+    $cmcRequest.Silent = $true
     Write-Log -LogString "Please provide the PIN for the signing certificate!" -Severity Notice
     $cmcRequest.Encode()
     #$strRequest = $cmcRequest.RawData($EncodingType.XCN_CRYPT_STRING_BASE64)
     Write-Log -LogString "CMC data:`n$($cmcRequest.RawData())" -Severity Debug
-    Set-Content -Value $cmcRequest.RawData() -LiteralPath $CsrFile
-    Write-Log -LogString "Signed CSR saved to $CsrFile"
+    Set-Content -Value $cmcRequest.RawData() -LiteralPath $CsrOutputFile
+    Write-Log -LogString "Signed CSR saved to $CsrOutputFile"
 }
 
 function Get-CertificateTemplates() {
@@ -538,7 +636,7 @@ function Execute() {
     $object = $powershell.BeginInvoke()
 
     while (!$object.IsCompleted) {
-        Start-Sleep -Milliseconds 50
+        Start-Sleep -Milliseconds 10
         [System.Windows.Forms.Application]::DoEvents()
     }
 
@@ -548,10 +646,10 @@ function Execute() {
     Write-Log -LogString "Return code: ---$($syncHash.result.ExitCode)---" -Severity Debug
 
     if (-Not ([string]::IsNullOrEmpty($syncHash.result.stdout))) {
-        Write-Log -LogString "Stdout: $($syncHash.result.stdout)" -Severity Debug
+        Write-Log -LogString "Stdout: $($syncHash.result.stdout.Trim())" -Severity Debug
     }
     if (-Not ([string]::IsNullOrEmpty($syncHash.result.stderr))) {
-        Write-Log -LogString "Stderr: $($syncHash.result.stderr)" -Severity Critical
+        Write-Log -LogString "Stderr: $($syncHash.result.stderr.Trim())" -Severity Critical
     }
 
     if($syncHash.result.ExitCode -ne 0) {
@@ -562,102 +660,6 @@ function Execute() {
     }
 
     return ,$syncHash.result
-}
-function Show-AdvReqWindow(){
-    param(
-        [Parameter(Mandatory=$false)]  [PSCustomObject]$Card
-    )
-
-    #
-    # Setup Window
-    #
-    $Win = @{}
-    $Win.Window = [Windows.Markup.XamlReader]::Load((New-Object -TypeName System.Xml.XmlNodeReader -ArgumentList $xaml_AdvReqWindow))
-    $xaml_AdvReqWindow.SelectNodes("//*[@*[contains(translate(name(.),'n','N'),'Name')]]") | ForEach-Object -Process {
-        $Win.$($_.Name) = $Win.Window.FindName($_.Name)
-    }
-
-    $Win.cmbTemplates.ItemsSource = Get-CertificateTemplates
-    $Win.cmbSigningCerts.ItemsSource = Get-SigningCertificates
-    $Win.txtSubject.Text = "/CN=$($env:Username)/"
-
-    $Win.btnShowFindUsersWindow.Add_Click({
-        $selectedUser = (Show-FindUsersWindow)
-        if(-not [string]::IsNullOrEmpty($selectedUser)) {
-            $Win.txtSubject.Text = $selectedUser
-        }
-    })
-
-    $Win.btnEnroll.add_Click({
-        if(([System.Windows.Forms.MessageBox]::Show("Are you sure you want to continue?","Warning",1,48)) -ne 'Ok') {
-            return
-        }
-
-        if($win.cmbTemplates.SelectedIndex -lt 0) {
-            [System.Windows.MessageBox]::Show("No Template selected!.", "Information", 'Ok', 'Information') | Out-Null
-            return
-        }
-
-        if((($win.cmbTemplates.SelectedItem).RequiredSignatures -gt 0) -and $win.cmbSigningCerts.SelectedIndex -lt 0) {
-            [System.Windows.MessageBox]::Show("Selected Template requires signing but not signing cert selected!.", "Information", 'Ok', 'Information') | Out-Null
-            return
-        }
-
-
-        try {
-            if($Win.chkReset.IsChecked) {
-                Validate-Pin -Pin1 $Win.pwdPin1.Password -Pin2 $Win.pwdPin2.Password
-                $Win.Window.Close()
-                Reset-Piv -Card $Card
-                Set-Pin -Card $card -CurrentPin "123456" -NewPin $Win.pwdPin1.Password
-                Set-Puk -Card $card -CurrentPuk "12345678" -NewPuk $Win.pwdPin1.Password
-            } else {
-                $Win.Window.Close()
-            }
-
-            if((-not $card.Modes -eq "CCID") -and ($Win.RequestNewSetCCIDOnlyMode.IsChecked -eq $true)) {
-                Set-Mode -Card $Card -Mode "CCID"
-            }
-
-            $args = @{
-                Card = $Card
-                Pin = $Win.pwdPin1.Password
-                KeyAlgo = $Win.cmbKeyAlgo.SelectedItem.Content
-                TouchPolicy = $Win.cmbKeyTouchPolicy.SelectedItem.Content
-                PinPolicy = $Win.cmbKeyPinPolicy.SelectedItem.Content
-                Slot = $Win.cmbSlot.SelectedItem.Tag
-            }
-            Generate-Key @args
-
-            Generate-Csr -card $Card -pin $Win.pwdPin1.Password -subject $Win.txtSubject.Text -slot $Win.cmbSlot.SelectedItem.Tag
-
-            if(($Win.cmbTemplates.SelectedItem).RequiredSignatures -gt 0) {
-                $args = @{
-                    SigningCertificateThumbprint = ($Win.cmbSigningCerts.SelectedItem).Thumbprint
-                    Subject = $Win.txtSubject.Text
-                    CertTemplate = $Win.cmbTemplates.SelectedItem
-                }
-                Sign-CertificateRequest  @args
-            }
-
-            $r = Request-Certificate -CertTemplate $Win.cmbTemplates.SelectedItem
-            if($r.pending) {
-                [System.Windows.MessageBox]::Show("Certificate request is pending CA Manager approval.`nRequest id: $($r.id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($r.id)"
-                return
-            }
-
-            Import-Certificate -Card $Card -Pin $Win.pwdPin1.Password -Slot $Win.cmbSlot.SelectedItem.Tag
-            Reset-Chuid -Card $Card -Pin $Win.pwdPin1.Password
-
-        } catch {
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
-        }
-
-    })
-
-    $Win.Window.ShowDialog()
-
 }
 function Show-CardOperationsWindow(){
     param(
@@ -695,10 +697,9 @@ function Show-CardOperationsWindow(){
             Validate-Pin -Pin1 $Win.pwdChangePinPin1.Password -Pin2 $Win.pwdChangePinPin2.Password
             $Win.Window.Close()
             Set-Pin -Card $Card -CurrentPin $Win.pwdChangePinPin.Password -NewPin $Win.pwdChangePinPin1.Password
-            Set-ResultText -Success "PIN Changed on $($Card.DeviceType)"
+            [System.Windows.MessageBox]::Show("PIN Changed on $($Card.DeviceType)", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PIN Change failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PIN Change failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
@@ -707,10 +708,9 @@ function Show-CardOperationsWindow(){
             Validate-Puk -Puk1 $Win.pwdChangePukPuk1.Password -Puk2 $Win.pwdChangePukPuk2.Password
             $Win.Window.Close()
             Set-Puk -Card $Card -CurrentPuk $Win.pwdChangePukPuk.Password -NewPuk $Win.pwdChangePukPuk1.Password
-            Set-ResultText -Success "PUK Changed on $($Card.DeviceType)"
+            [System.Windows.MessageBox]::Show("PUK Changed on $($Card.DeviceType)", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PUK Change failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PUK Change failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
@@ -719,25 +719,23 @@ function Show-CardOperationsWindow(){
             Validate-Pin -Pin1 $Win.pwdUnblockPinPin1.Password -Pin2 $Win.pwdUnblockPinPin1.Password
             $Win.Window.Close()
             Unblock-Pin -Card $Card -CurrentPuk $Win.pwdUnblockPinPuk.Password -NewPin $Win.pwdUnblockPinPin1.Password
-            Set-ResultText -Success "PIN Unblocked and changed on $($Card.DeviceType)"
+            [System.Windows.MessageBox]::Show("PIN Unblocked and changed on $($Card.DeviceType)", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PIN Unblock failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PIN Unblock failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
     $Win.btnResetPiv.Add_Click({
-        if(([System.Windows.Forms.MessageBox]::Show("This will reset the PIV application, continue?","Warning",1,48)) -ne 'Ok') {
+        if(([System.Windows.Forms.MessageBox]::Show("This will reset the PIV application, continue?`n`nWarning! All keys will be lost!","Warning",1,48)) -ne 'Ok') {
             return
         }
 
         try{
             $Win.Window.Close()
             Reset-Piv -Card $Card
-            Set-ResultText -Success "PIV on $($Card.DeviceType) reset successfully"
+            [System.Windows.MessageBox]::Show("PIV on $($Card.DeviceType) reset successfully", "Information", 'Ok', 'Information') | Out-Null
         } catch {
-            Set-ResultText -Failed "PIV reset failed on card $($Card.DeviceType)"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("PIV reset failed on card $(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
@@ -772,56 +770,134 @@ function Show-EnrollWindow(){
         }
     })
 
+    $Win.btnCancel.add_Click({
+        $Win.Window.Close()
+    })
+
     $Win.btnEnroll.Add_Click({
-        if(([System.Windows.Forms.MessageBox]::Show("This will reset the PIV application and all existing keys will be lost!, continue?","Warning",1,48)) -ne 'Ok') {
-            return
+        # Get options from UI
+        if($Win.cmbiNewCard.IsSelected -or $Win.chkReset.IsChecked) {
+            if(([System.Windows.Forms.MessageBox]::Show("This will reset the PIV application and all existing keys will be lost!, continue?","Warning",1,48)) -ne 'Ok') {
+                return
+            }
+
+            $resetPiv = $true
+            $CurrentPin = "123456"
+            $CurrentPuk = "12345678"
+            if(-not (Validate-Pin -Pin1 $Win.pwdNewPin1.Password -Pin2 $Win.pwdNewPin2.Password)) {
+                [System.Windows.MessageBox]::Show("PIN validation failed!", "Information", 'Ok', 'Information') | Out-Null
+                return
+            }
+            $NewPin = $Win.pwdNewPin1.Password
+            $NewPuk = $Win.pwdNewPin1.Password
+        } else {
+            $resetPiv = $false
+            $CurrentPin = $Win.pwdCurrentPin.Password
         }
+
+        if($Win.cmbiAdvRequest.IsSelected) {
+            $Slot = $Win.cmbSlot.SelectedItem.Tag
+            $KeyAlgo = $Win.cmbKeyAlgo.SelectedItem.Tag
+            $PinPolicy = $Win.cmbKeyPinPolicy.SelectedItem.Tag
+        } else {
+            $Slot = "9a"
+            $KeyAlgo = "RSA2048"
+            $PinPolicy = "DEFAULT"
+        }
+
+        $TouchPolicy = $Win.cmbKeyTouchPolicy.SelectedItem.Tag
+
+        $Subject = $Win.txtSubject.Text
 
         if($win.cmbTemplates.SelectedIndex -lt 0) {
             [System.Windows.MessageBox]::Show("No Template selected!.", "Information", 'Ok', 'Information') | Out-Null
             return
+        } else {
+            $CertTemplate = $Win.cmbTemplates.SelectedItem
         }
 
         if((($win.cmbTemplates.SelectedItem).RequiredSignatures -gt 0) -and $win.cmbSigningCerts.SelectedIndex -lt 0) {
             [System.Windows.MessageBox]::Show("Selected Template requires signing but not signing cert selected!.", "Information", 'Ok', 'Information') | Out-Null
             return
+        } else {
+            $SigningCert = $Win.cmbSigningCerts.SelectedItem
         }
 
+        $SetCCIDOnlyMode = $Win.chkSetCCIDOnlyMode.IsChecked
+
+
+        $opts = "Reset piv: $ResetPiv`nSlot: $Slot`nKey Algorithm: $KeyAlgo`nPIN Policy: $PinPolicy`nTouchPolicy: $TouchPolicy`nCertificate Template: $CertTemplate`nSigning Certificate: $SigningCert`nSubject: $Subject`nSet CCID only mode: $SetCCIDOnlyMode"
+        Write-Log -Logstring "Attempting enroll will the following options:`n$opts" -Severity Debug
+
         try {
-            Validate-Pin -Pin1 $Win.pwdPin1.Password -Pin2 $Win.pwdPin2.Password
             $Win.Window.Close()
-            reset-piv -Card $card
-            Set-Pin -Card $card -CurrentPin "123456" -NewPin $Win.pwdPin1.Password
-            Set-Puk -Card $card -CurrentPuk "12345678" -NewPuk $Win.pwdPin1.Password
-            Generate-Key -Card $card -PIN $Win.pwdPin1.Password -Slot "9a" -TouchPolicy $Win.cmbKeyTouchPolicy.SelectedItem.Content
-
-            Generate-Csr -Card $card -PIN $Win.pwdPin1.Password -Subject $Win.txtSubject.Text -Slot "9a"
-
-            if(($Win.cmbTemplates.SelectedItem).RequiredSignatures -gt 0) {
-                Sign-CertificateRequest -SigningCertificateThumbprint ($Win.cmbSigningCerts.SelectedItem).Thumbprint -Subject $Win.txtSubject.Text -CertTemplate $Win.cmbTemplates.SelectedItem
+            if($resetPiv) {
+                reset-piv -Card $Card
+                Set-Pin -Card $Card -CurrentPin $CurrentPin -NewPin $NewPin
+                Set-Puk -Card $Card -CurrentPuk $CurrentPuk -NewPuk $NewPuk
+                $Pin = $NewPin
+            } else {
+                $Pin = $CurrentPin
             }
 
-            $r = Request-Certificate -CertTemplate $Win.cmbTemplates.SelectedItem
-            if($r.pending) {
-                [System.Windows.MessageBox]::Show("Certificate request is pending CA Manager approval.`nRequest id: $($r.id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($r.id)"
+            $parms = @{
+                Card = $Card
+                Pin = $Pin
+                TouchPolicy = $TouchPolicy
+                PinPolicy = $PinPolicy
+                Slot = $Slot
+                OutputFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.pubkey.pem"
+            }
+            Generate-Key @parms
+
+            $parms = @{
+                Card = $Card
+                Pin = $Pin
+                Subject = $Subject
+                Slot = $Slot
+                PubKeyFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.pubkey.pem"
+                OutputFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.csr"
+            }
+            Generate-Csr @parms
+
+            if(($CertTemplate).RequiredSignatures -gt 0) {
+                $parms = @{
+                    SigningCertificateThumbprint = ($SigningCert).Thumbprint
+                    Subject = $Subject
+                    CertTemplate = $CertTemplate
+                    CsrInputFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.csr"
+                    CsrOutputFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.signed.csr"
+                }
+                Sign-CertificateRequest  @parms
+                $request = Request-Certificate -CertTemplate $CertTemplate -CsrFile "$($script:workDir)\$($Card.SerialNumber).$Slot.signed.csr" -OutputFile "$($script:workDir)\$($Card.SerialNumber).$Slot.crt"
+            }
+            else {
+                $request = Request-Certificate -CertTemplate $CertTemplate -CsrFile "$($script:workDir)\$($Card.SerialNumber).$Slot.csr" -OutputFile "$($script:workDir)\$($Card.SerialNumber).$Slot.crt"
+            }
+
+            if($request.ReturnCode -eq 5) {
+                [System.Windows.MessageBox]::Show("Certificate request is pending CA Manager approval.`nRequest id: $($request.Id)", "Information", 'Ok', 'Information') | Out-Null
+                Set-ResultText -Success "Enrollment pending approval, id: $($request.Id)"
                 return
+            } elseif($request.ReturnCode -eq 3) {
+                Import-Certificate -Card $Card -Pin $Pin -Slot $Slot -CertBase64 $request.Base64
+            } else {
+                throw "Unexpected return code [$($request.ReturnCode)] while requesting certificate."
             }
 
-            Import-Certificate -Card $card -pin $Win.pwdPin1.Password -slot "9a"
-            Reset-Chuid -Card $card -pin $Win.pwdPin1.Password
-            Set-Mode -Card $card -Mode "CCID"
-            Set-ResultText -Success "Enrollment succeeded"
-
+            Reset-Chuid -Card $Card -Pin $Pin
+            if($SetCCIDOnlyMode) {
+                Set-Mode -Card $Card -Mode "CCID"
+            }
+            [System.Windows.MessageBox]::Show("Certificate enrolled successfully!`n`n$opts", "Information", 'Ok', 'Information') | Out-Null
+            [System.Windows.MessageBox]::Show("The Card Holder Unique Identifier (CHUID) has been reset.`n`nYou should remove and reinsert the key before enrolling other certificates or doing any signing operations.", "Information", 'Ok', 'Information') | Out-Null
         } catch {
             #[System.Windows.MessageBox]::Show("$($_ | Out-String)", "Error", 'Ok', 'Error') | Out-Null
-            Set-ResultText -Failed "Enrollment failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show("Enrollment failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
 
     $Win.Window.ShowDialog()
-    Write-Host "Exited!"
 }
 function Show-FindUsersWindow() {
     #
@@ -855,7 +931,7 @@ function Show-FindUsersWindow() {
 
     if($FindUsersWindow.OkButton.IsChecked)
     {
-        return "$((Get-WmiObject Win32_NTDOMAIN).DomainName)\$(($FindUsersWindow.DataGrid.SelectedItem).samAccountName)"
+        return "$((Get-WmiObject Win32_NTDOMAIN).DomainName)\$(($FindUsersWindow.DataGrid.SelectedItem).samAccountName)".Trim()
     }
 }
 function Show-MainWindow(){
@@ -909,8 +985,8 @@ function Show-MainWindow(){
     }
 
     $MainWindow.Window.add_ContentRendered( {
-        $cards = Get-SmartCards
-        $MainWindow.lstReaders.ItemsSource = $cards
+        $MainWindow.lstReaders.ItemsSource = Get-SmartCards
+        $MainWindow.txtCA.Text = $script:ca
     })
 
     $MainWindow.ReloadCardsButton.Add_Click({
@@ -920,12 +996,6 @@ function Show-MainWindow(){
     $MainWindow.btnShowEnrollWindow.Add_Click({
         if(Check-ValidCardIsSelected) {
            $result = Show-EnrollWindow -Card $MainWindow.lstReaders.SelectedItem
-        }
-    })
-
-    $MainWindow.btnShowAdvReqWindow.Add_Click({
-        if(Check-ValidCardIsSelected) {
-            Show-AdvReqWindow -Card $MainWindow.lstReaders.SelectedItem
         }
     })
 
@@ -976,27 +1046,34 @@ function Show-RequestPendingWindow(){
         $Win.$($_.Name) = $Win.Window.FindName($_.Name)
     }
 
-    $Win.btnEnroll.Add_Click({
-        try{
-            $r = Request-Certificate -Id $Win.txtId.Text
-            Write-host "lll"
-            $r
-            if($r.pending) {
-                [System.Windows.MessageBox]::Show("Certificate request is still pending CA Manager approval.`nRequest id: $($r.id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($r.id)"
-            } else {
-                Import-Certificate -Card $card -pin $Win.pwdPin.Password -slot ($Win.cmbSlot.SelectedItem).Tag
-                Reset-Chuid -Card $card -pin $Win.pwdPin.Password
-                Set-ResultText -Success "Enrollment succeeded"
-            }
-            $r
-        } catch {
-            Set-ResultText -Failed "Request failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
-        }
-
+    $Win.btnCancel.add_Click({
+        $Win.Window.Close()
     })
 
+    $Win.btnEnroll.Add_Click({
+        try{
+            $Id = $Win.txtId.Text
+            $Slot = $Win.cmbSlot.SelectedItem.Tag
+            $Pin = $Win.pwdPin.Password
+
+            $request = Request-Certificate -Id $Id
+
+            if($request.ReturnCode -eq 5) {
+                [System.Windows.MessageBox]::Show("Certificate request is still pending CA Manager approval.`nRequest id: $($Id)", "Information", 'Ok', 'Information') | Out-Null
+                Set-ResultText -Success "Enrollment pending approval, id: $($Id)"
+                return
+            } elseif($request.ReturnCode -eq 3) {
+                Import-Certificate -Card $Card -Pin $Pin -Slot $Slot -CertBase64 $request.Base64
+                Reset-Chuid -Card $Card -Pin $Pin
+                [System.Windows.MessageBox]::Show("Certificate enrolled successfully!", "Information", 'Ok', 'Information') | Out-Null
+                [System.Windows.MessageBox]::Show("The Card Holder Unique Identifier (CHUID) has been reset.`n`nYou should remove and reinsert the key before enrolling other certificates or doing any signing operations.", "Information", 'Ok', 'Information') | Out-Null
+            } else {
+                throw "Unexpected return code [$($request.ReturnCode)] while requesting certificate."
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Request failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
+        }
+    })
     $Win.Window.ShowDialog()
 }
 function Validate-Pin()
@@ -1020,12 +1097,13 @@ function Validate-Pin()
         [string]$Pin2
      )
      if(-not ($Pin1.ToString() -eq $Pin2.ToString())) {
-        throw "PINs not matching!"
+        return $false
      } elseif($Pin1.Contains(" ")) {
-        throw "PIN contains whitespace!"
+        return $false
      } elseif(($Pin1.Length -lt 6) -or $Pin1.Length -gt 8) {
-        throw "PIN length less than 4 or more than 8"
+        return $false
      }
+     return $true
 }
 
 function Validate-Puk()
@@ -1049,12 +1127,13 @@ function Validate-Puk()
         [string]$Puk2
      )
      if(-not ($Puk1.ToString() -eq $Puk2.ToString())) {
-        throw "PUKs not matching!"
+        return $false
      } elseif($Puk1.Contains(" ")) {
-        throw "PUK contains whitespace!"
+        return $false
      } elseif(($Puk1.Length -lt 6) -or $Puk1.Length -gt 8) {
-        throw "PUK length less than 4 or more than 8"
+        return $false
      }
+     return $true
 }
 
 
@@ -1117,36 +1196,6 @@ function Get-ADUsers() {
     #$entries.Close() --<
     return ,$users
 }
-
-
-function Set-ResultText() {
-    <#
-    .SYNOPSIS
-        Sets the result text in the Main Window
-    .PARAMETER Success
-        Whether to mark the result text as successful (green)
-    .PARAMETER Failed
-        Whether to mark the result text as failure (red)
-    #>
-    param(
-        [Parameter(ParameterSetName = "Success")]
-        [AllowNull()]
-        [AllowEmptyString()]
-        [string]$Success,
-        [Parameter(ParameterSetName = "Failed")]
-        [AllowNull()]
-        [AllowEmptyString()]
-        [string]$Failed
-    )
-
-    if($Success) {
-        $MainWindow.txtResult.Text = $Success
-        $MainWindow.txtResult.Foreground  = "Green"
-    } else {
-        $MainWindow.txtResult.Text = $Failed
-        $MainWindow.txtResult.Foreground  = "Red"
-    }
-}
 Function Write-Log
 {
     <#
@@ -1162,107 +1211,232 @@ Function Write-Log
     [AllowEmptyString()]
     [string]$LogString,
     [Parameter(Mandatory = $false)]
-    [ValidateSet("Emergency", "Alert", "Critical", "Error", "Warning", "Notice", "Informational", "Debug")]
-    [string]$Severity = "Informational"
+    [ValidateSet("Critical", "Warning", "Notice", "Debug")]
+    [string]$Severity = "Notice"
     )
 
     $LogString = Hide-Secrets -String $LogString
 
     [int]$intSeverity = 0
 
-    if($Severity -eq "Emergency") { $intSeverity = 0; $color = "Red" }
-    if($Severity -eq "Alert") { $intSeverity = 1; $color = "Red" }
     if($Severity -eq "Critical") { $intSeverity = 2; $color = "Red" }
-    if($Severity -eq "Error") { $intSeverity = 3; $color = "Red" }
     if($Severity -eq "Warning") { $intSeverity = 4; $color = "Magenta" }
     if($Severity -eq "Notice") { $intSeverity = 5; $color = "Cyan" }
-    if($Severity -eq "Informational") { $intSeverity = 6; $color = "White" }
     if($Severity -eq "Debug") { $intSeverity = 7; $color = "Yellow" }
 
-    if($intSeverity -le 5)
+    if(($Severity -eq "Debug") -and (-not $script:ShowDebugOutput))
     {
-        Write-Host $LogString -Foreground $color
+        return
     }
-    elseif(($intSeverity -eq 6) -and ($script:ShowVerboseOutput))
-    {
-        Write-Host $LogString -Foreground $color
+
+    $TimeStamp = ((Get-Date).ToString("yyyy-MM-dd HH:mm:ss"))
+
+    if($LogString.Contains([Environment]::NewLine)) {
+        $LogString = ($TimeStamp + " [" + $Severity + "] [" + $((Get-PSCallStack)[1].Command) + "] `n" + $LogString)
+    } else {
+        $LogString = ($TimeStamp + " [" + $Severity + "] [" + $((Get-PSCallStack)[1].Command) + "] " + $LogString)
     }
-    elseif(($intSeverity -eq 7) -and ($script:ShowDebugOutput))
-    {
-        Write-Host $LogString -Foreground $color
-    }
+
+
+
+
+    Write-Host $LogString -Foreground $color
+
 }
 #endregion
 
 #region XAML
-[xml]$xaml_FindUsersWindow = @"
-
-<Window
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    x:Name="FindUsersWindow"
-    Title="" Height="500" Width="725">
-
-    <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="VisCon"/>
-
-        <Style TargetType="{x:Type TextBlock}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type TextBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type Button}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type ListBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type ComboBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type CheckBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-
-    </Window.Resources>
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="10,0,10,0">
-            <TextBlock Text="User: " VerticalAlignment="Center"/>
-            <TextBox Name="SearchTextBox" Width="100"/>
-            <Button Content="Search" Height="25" Name="SearchButton" Margin="5,0,0,0"/>
-        </StackPanel>
-
-        <!--<ScrollViewer Grid.Row="4">-->
-            <DataGrid ScrollViewer.CanContentScroll="True"  ScrollViewer.HorizontalScrollBarVisibility="Auto" Grid.Row="4" IsReadOnly="True" ColumnWidth="*" HorizontalAlignment="Stretch" Name="DataGrid" AutoGenerateColumns="True" SelectionMode="Single" Margin="10,10,10,0"/>
-        <!--</ScrollViewer>-->
-        <TextBlock Name="CountTextBlock" Grid.Column="0" Grid.ColumnSpan="4" Grid.Row="5" Margin="0,0,10,2" HorizontalAlignment="Right"/>
-        <StackPanel Grid.Column="0" HorizontalAlignment="Center" Grid.Row="6" Orientation="Horizontal">
-            <ToggleButton Content="Ok" Width="60" Height="25" Name="OkButton" Margin="10"/>
-            <Button Content="Cancel" Width="60" Height="25" Name="CancelButton" Margin="10"/>
-        </StackPanel>
-
-    </Grid>
-</Window>
-
-"@
 [xml]$xaml_EnrollWindow = @"
 
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     x:Name="EnrollWindow"
-    Title="" Height="325" Width="425">
+    SizeToContent="WidthAndHeight"
+    Title="" MinHeight="325" MinWidth="425">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="VisCon"/>
+
+        <SolidColorBrush x:Key="iconColor">#336699</SolidColorBrush>
+        <!-- Material Design Icons -->
+        <Geometry x:Key="searchIcon">M15.5,12C18,12 20,14 20,16.5C20,17.38 19.75,18.21 19.31,18.9L22.39,22L21,23.39L17.88,20.32C17.19,20.75 16.37,21 15.5,21C13,21 11,19 11,16.5C11,14 13,12 15.5,12M15.5,14A2.5,2.5 0 0,0 13,16.5A2.5,2.5 0 0,0 15.5,19A2.5,2.5 0 0,0 18,16.5A2.5,2.5 0 0,0 15.5,14M10,4A4,4 0 0,1 14,8C14,8.91 13.69,9.75 13.18,10.43C12.32,10.75 11.55,11.26 10.91,11.9L10,12A4,4 0 0,1 6,8A4,4 0 0,1 10,4M2,20V18C2,15.88 5.31,14.14 9.5,14C9.18,14.78 9,15.62 9,16.5C9,17.79 9.38,19 10,20H2Z</Geometry>
+        <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
+        <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
+
+        <!-- ModernUI Icons Icons -->
+        <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
+        <Geometry x:Key="backIcon">F1 M 57,42L 57,34L 32.25,34L 42.25,24L 31.75,24L 17.75,38L 31.75,52L 42.25,52L 32.25,42L 57,42 Z </Geometry>
+        <Geometry x:Key="reloadIcon">F1 M 38,20.5833C 42.9908,20.5833 47.4912,22.6825 50.6667,26.046L 50.6667,17.4167L 55.4166,22.1667L 55.4167,34.8333L 42.75,34.8333L 38,30.0833L 46.8512,30.0833C 44.6768,27.6539 41.517,26.125 38,26.125C 31.9785,26.125 27.0037,30.6068 26.2296,36.4167L 20.6543,36.4167C 21.4543,27.5397 28.9148,20.5833 38,20.5833 Z M 38,49.875C 44.0215,49.875 48.9963,45.3932 49.7703,39.5833L 55.3457,39.5833C 54.5457,48.4603 47.0852,55.4167 38,55.4167C 33.0092,55.4167 28.5088,53.3175 25.3333,49.954L 25.3333,58.5833L 20.5833,53.8333L 20.5833,41.1667L 33.25,41.1667L 38,45.9167L 29.1487,45.9167C 31.3231,48.3461 34.483,49.875 38,49.875 Z </Geometry>
+        <Geometry x:Key="cardIcon">F1 M 23.75,22.1667L 52.25,22.1667C 55.7478,22.1667 58.5833,25.0022 58.5833,28.5L 58.5833,47.5C 58.5833,50.9978 55.7478,53.8333 52.25,53.8333L 23.75,53.8333C 20.2522,53.8333 17.4167,50.9978 17.4167,47.5L 17.4167,28.5C 17.4167,25.0022 20.2522,22.1667 23.75,22.1667 Z M 57,42.75L 19,42.75L 19,45.9167C 19,47.0702 19.3084,48.1518 19.8473,49.0833L 56.1527,49.0833C 56.6916,48.1518 57,47.0702 57,45.9167L 57,42.75 Z M 20.5833,25.3333L 20.5833,31.6667L 26.9167,31.6667L 26.9167,25.3333L 20.5833,25.3333 Z </Geometry>
+        <Geometry x:Key="infoIcon">F1 M 31.6666,30.0834L 42.7499,30.0834L 42.7499,33.2501L 42.7499,52.2501L 45.9165,52.2501L 45.9165,57.0001L 31.6666,57.0001L 31.6666,52.2501L 34.8332,52.2501L 34.8332,34.8335L 31.6666,34.8335L 31.6666,30.0834 Z M 38.7917,19C 40.9778,19 42.75,20.7722 42.75,22.9583C 42.75,25.1445 40.9778,26.9167 38.7917,26.9167C 36.6055,26.9167 34.8333,25.1445 34.8333,22.9583C 34.8333,20.7722 36.6055,19 38.7917,19 Z </Geometry>
+
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type PasswordBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+            <Setter Property="Width" Value="90"/>
+        </Style>
+        <Style TargetType="{x:Type TextBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type Button}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Name="EnrollGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowEnrollGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120"/>
+            <ColumnDefinition Width="10"/>
+            <ColumnDefinition Width="240"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="8"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="8"/>
+        </Grid.RowDefinitions>
+        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Enroll certificate" FontSize="16"/>
+        <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="2" Text="Enrollment template"/>
+        <ComboBox Grid.Column="2" Grid.Row="2" SelectedIndex="0" Name="cmbRequestType">
+            <ComboBoxItem Content="Wipe and enroll new card" Name="cmbiNewCard" Tag="newcard"/>
+            <ComboBoxItem Content="Advanced enrollment" Name="cmbiAdvRequest" Tag="advrequest"/>
+        </ComboBox>
+        <TextBlock Grid.Column="0" Grid.Row="3" Text="Certificate Template"/>
+        <ComboBox Grid.Column="2" Grid.Row="3" Name="cmbTemplates" DisplayMemberPath="DisplayName"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="5" Text="Signing certificate" FontSize="12" Name="EnrollSigningCertTextBlock">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding ElementName=cmbTemplates, Path=SelectedItem.RequiredSignatures, FallbackValue=0}" Value="0">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <ComboBox Grid.Column="2" Grid.Row="5" Name="cmbSigningCerts" DisplayMemberPath="Description" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="6" Text="Subject" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
+
+        <Grid Grid.Column="2" Grid.Row="6" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" Name="txtSubject" IsReadOnly="True" HorizontalAlignment="Stretch"/>
+            <Button Grid.Column="1" Height="25" Width="25" HorizontalAlignment="Right" VerticalAlignment="Top" Name="btnShowFindUsersWindow" ToolTip="Find user" Background="Transparent" Margin="2,2,0,2">
+                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource searchIcon}"/>
+            </Button>
+        </Grid>
+
+        <!-- Only Show if Advanced request-->
+        <TextBlock Grid.Column="0" Grid.Row="7" Text="Reset PIV" Name="txtResetPiv" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <CheckBox Grid.Column="2" Grid.Row="7" Name="chkReset" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="8" Text="Set CCID only mode" Name="txtSetMode" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <CheckBox Grid.Column="2" Grid.Row="8" Name="chkSetCCIDOnlyMode" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+
+
+        <TextBlock Grid.Column="0" Grid.Row="9" Text="Target Slot" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="9" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="Slot 9a: PIV Authentication" Tag="9a"/>
+            <ComboBoxItem Content="Slot 9c: Digital Signature" Tag="9c"/>
+            <ComboBoxItem Content="Slot 9d: Key Management" Tag="9d"/>
+            <ComboBoxItem Content="Slot 9e: Card Authentication" Tag="9e"/>
+            <ComboBoxItem Content="Slot f9: Attestation" Tag="f9"/>
+        </ComboBox>
+
+        <TextBlock Grid.Column="0" Grid.Row="10" Text="Key Algorithm" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="10"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyAlgo" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="TDES" Tag="TDES"/>
+            <ComboBoxItem Content="RSA1024" Tag="RSA1024"/>
+            <ComboBoxItem Content="RSA2048" Tag="RSA2048"/>
+            <ComboBoxItem Content="ECCP256" Tag="ECCP256"/>
+            <ComboBoxItem Content="ECCP384" Tag="ECCP384"/>
+        </ComboBox>
+
+        <TextBlock Grid.Column="0" Grid.Row="11" Text="Key Touch Policy"/>
+        <ComboBox Grid.Column="2" Grid.Row="11"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
+            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
+            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
+            <ComboBoxItem Content="CACHED" Tag="CACHED"/>
+        </ComboBox>
+
+        <TextBlock Grid.Column="0" Grid.Row="12" Text="Key PIN Policy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="12"  HorizontalAlignment="Stretch" SelectedIndex="0" Name="cmbKeyPinPolicy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="DEFAULT" Tag="DEFAULT"/>
+            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
+            <ComboBoxItem Content="ONCE" Tag="ONCE"/>
+            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
+        </ComboBox>
+
+        <TextBlock Grid.Column="0" Grid.Row="13" Text="Current PIN" Name="txtCurrentPin">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding ElementName=chkReset, Path=IsChecked}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <PasswordBox Grid.Column="2" Grid.Row="13" Name="pwdCurrentPin" HorizontalAlignment="Left" Visibility="{Binding ElementName=txtCurrentPin, Path=Visibility}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="14" Text="New PIN" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="14" Name="pwdNewPin1" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="15" Text="New PIN (Again)" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="15" Name="pwdNewPin2" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+
+        <StackPanel Orientation="Horizontal" Grid.Column="2" HorizontalAlignment="Right" Grid.Row="16" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Enroll" Width="90"/>
+            <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
+        </StackPanel>
+    </Grid>
+</Window>
+
+"@
+[xml]$xaml_CardOperationsWindow = @"
+
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Name="RequestPendingWindow"
+    Title="" Height="225" Width="425">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="VisCon"/>
@@ -1308,74 +1482,125 @@ Function Write-Log
 
     </Window.Resources>
 
-    <Grid Name="EnrollGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowEnrollGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="120"/>
-            <ColumnDefinition Width="10"/>
-            <ColumnDefinition Width="240"/>
-            <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="8"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Enroll new card" FontSize="16"/>
-        <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="3" Text="Template"/>
-        <ComboBox Grid.Column="2" Grid.Row="3" Name="cmbTemplates" DisplayMemberPath="DisplayName"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="5" Text="Signing certificate" FontSize="12" Name="EnrollSigningCertTextBlock">
-            <TextBlock.Style>
-                <Style TargetType="TextBlock">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding ElementName=cmbTemplates, Path=SelectedItem.RequiredSignatures, FallbackValue=0}" Value="0">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </TextBlock.Style>
-        </TextBlock>
-        <ComboBox Grid.Column="2" Grid.Row="5" Name="cmbSigningCerts" DisplayMemberPath="Description" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="6" Text="Subject" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
-
-        <Grid Grid.Column="2" Grid.Row="6" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}">
+    <Grid>
+        <Grid Grid.Row="1" Name="grdChangePin" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="120"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="240"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0" Name="txtSubject" IsReadOnly="True" HorizontalAlignment="Stretch"/>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-            <Button Grid.Column="1" Height="25" Width="25" HorizontalAlignment="Right" VerticalAlignment="Top" Name="btnShowFindUsersWindow" ToolTip="Find user" Background="Transparent" Margin="2,2,0,2">
-                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource searchIcon}"/>
-            </Button>
+            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Change PIN" FontSize="16"/>
+            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="2" Text="Current PIN"/>
+            <PasswordBox Grid.Column="2" Grid.Row="2" Name="pwdChangePinPin" HorizontalAlignment="Left"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="3" Text="New PIN"/>
+            <PasswordBox Grid.Column="2" Grid.Row="3" Name="pwdChangePinPin1" HorizontalAlignment="Left"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="4" Text="New PIN (Again)"/>
+            <PasswordBox Grid.Column="2" Grid.Row="4" Name="pwdChangePinPin2" HorizontalAlignment="Left"/>
+
+            <Button Grid.Column="2" Grid.Row="5" Name="btnChangePin" Content="Ok" Width="90" HorizontalAlignment="Right"/>
         </Grid>
 
-        <TextBlock Grid.Column="0" Grid.Row="7" Text="Key Touch Policy"/>
-        <ComboBox Grid.Column="2" Grid.Row="7"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
-            <ComboBoxItem Content="ALWAYS"/>
-            <ComboBoxItem Content="NEVER"/>
-            <ComboBoxItem Content="CACHED"/>
-        </ComboBox>
+        <Grid Grid.Row="1" Name="grdChangePuk" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="120"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-        <TextBlock Grid.Column="0" Grid.Row="8" Text="New PIN"/>
-        <PasswordBox Grid.Column="2" Grid.Row="8" Name="pwdPin1" HorizontalAlignment="Left"/>
+            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Change PUK" FontSize="16"/>
+            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
 
-        <TextBlock Grid.Column="0" Grid.Row="9" Text="New PIN (Again)"/>
-        <PasswordBox Grid.Column="2" Grid.Row="9" Name="pwdPin2" HorizontalAlignment="Left"/>
+            <TextBlock Grid.Column="0" Grid.Row="2" Text="Current PUK"/>
+            <PasswordBox Grid.Column="2" Grid.Row="2" Name="pwdChangePukPuk" HorizontalAlignment="Left"/>
 
-        <ToggleButton Grid.Column="2" Grid.Row="10" Name="btnEnroll" Content="Enroll" Width="90" HorizontalAlignment="Right"/>
+            <TextBlock Grid.Column="0" Grid.Row="3" Text="New PUK"/>
+            <PasswordBox Grid.Column="2" Grid.Row="3" Name="pwdChangePukPuk1" HorizontalAlignment="Left"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="4" Text="New PUK (Again)"/>
+            <PasswordBox Grid.Column="2" Grid.Row="4" Name="pwdChangePukPuk2" HorizontalAlignment="Left"/>
+
+            <Button Grid.Column="2" Grid.Row="5" Name="btnChangePuk" Content="Ok" Width="90" HorizontalAlignment="Right"/>
+        </Grid>
+
+        <Grid Grid.Row="1" Name="grdUnblockPin" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="120"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Unblock PIN" FontSize="16"/>
+            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="2" Text="Current PUK"/>
+            <PasswordBox Grid.Column="2" Grid.Row="2" Name="pwdUnblockPinPuk" HorizontalAlignment="Left"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="3" Text="New PIN"/>
+            <PasswordBox Grid.Column="2" Grid.Row="3" Name="pwdUnblockPinPin1" HorizontalAlignment="Left"/>
+
+            <TextBlock Grid.Column="0" Grid.Row="4" Text="New PIN (Again)"/>
+            <PasswordBox Grid.Column="2" Grid.Row="4" Name="pwdUnblockPinPin2" HorizontalAlignment="Left"/>
+
+            <Button Grid.Column="2" Grid.Row="5" Name="btnUnblockPin" Content="Ok" Width="90" HorizontalAlignment="Right"/>
+        </Grid>
+
+         <Grid Grid.Row="1" Name="grdResetPiv" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="120"/>
+                <ColumnDefinition Width="10"/>
+                <ColumnDefinition Width="240"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="8"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Reset PIV" FontSize="16"/>
+            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
+
+            <Button Grid.Column="2" Grid.Row="5" Name="btnResetPiv" Content="Ok" Width="90" HorizontalAlignment="Right"/>
+        </Grid>
+
     </Grid>
+
+
 </Window>
 
 "@
@@ -1396,6 +1621,12 @@ Function Write-Log
         <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
         <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
         <Geometry x:Key="certificateIcon">M13 21L15 20L17 21V14H13M17 9V7L15 8L13 7V9L11 10L13 11V13L15 12L17 13V11L19 10M20 3H4A2 2 0 0 0 2 5V15A2 2 0 0 0 4 17H11V15H4V5H20V15H19V17H20A2 2 0 0 0 22 15V5A2 2 0 0 0 20 3M11 8H5V6H11M9 11H5V9H9M11 14H5V12H11Z</Geometry>
+        <Geometry x:Key="requestIcon">M20 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H13.09A5.47 5.47 0 0 1 13 19A6 6 0 0 1 19 13A5.88 5.88 0 0 1 22 13.81V6A2 2 0 0 0 20 4M20 11H4V8H20M20 15V18H23V20H20V23H18V20H15V18H18V15Z</Geometry>
+        <Geometry x:Key="requestIcon2">M21,18H24V20H21V23H19V20H16V18H19V15H21V18M19,8V6H3V8H19M19,12H3V18H14V20H3C1.89,20 1,19.1 1,18V6C1,4.89 1.89,4 3,4H19A2,2 0 0,1 21,6V13H19V12Z</Geometry>
+
+        <Geometry x:Key="retrieveIcon">M20 4H4C2.9 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 14.91 14.41 12 18 12C19.5 12 20.9 12.53 22 13.4V6C22 4.89 21.11 4 20 4M20 11H4V8H20V11M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
+        <Geometry x:Key="retrieveIcon2">M20 4H4C2.89 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 18.33 11.5 18.17 11.53 18H4V12H20V12.32C20.74 12.56 21.41 12.93 22 13.4V6C22 4.89 21.1 4 20 4M20 8H4V6H20V8M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
+
 
         <!-- ModernUI Icons Icons -->
         <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
@@ -1583,174 +1814,182 @@ Function Write-Log
                 </Grid>
             </GroupBox>
 
-        <ScrollViewer Grid.Column="0" Grid.Row="2" Margin="10" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" CanContentScroll="True">
-            <StackPanel>
-                <GroupBox Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.CardOk, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <Border Grid.Column="0" Grid.RowSpan="2" Margin="0,0,2,0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
-                                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource cardIcon}"/>
-                            </Border>
-                            <TextBlock Text="Card info" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Serial number"/>
-                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.SerialNumber}"/>
+        <GroupBox Grid.Column="0" Grid.Row="2" Margin="10" Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.CardOk, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
+        <GroupBox.Header>
+            <TextBlock Text="Selected Card" FontWeight="Bold"/>
+        </GroupBox.Header>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="PIV Version"/>
-                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PIV_Version}"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" CanContentScroll="True">
+                <StackPanel>
+                    <GroupBox>
+                        <GroupBox.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Grid.Column="0" Grid.RowSpan="2" Margin="0,0,2,0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
+                                    <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource cardIcon}"/>
+                                </Border>
+                                <TextBlock Text="Card info" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
+                            </StackPanel>
+                        </GroupBox.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Firmware Version"/>
-                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.FirmwareVersion}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Serial number"/>
+                            <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.SerialNumber}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Modes"/>
-                        <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.Modes}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="PIV Version"/>
+                            <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PIV_Version}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="PIN Retries"/>
-                        <TextBlock Grid.Row="4" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PINRetries}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Firmware Version"/>
+                            <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.FirmwareVersion}"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="4" Text="OTP"/>
-                        <TextBlock Grid.Row="0" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OTP}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Modes"/>
+                            <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.Modes}"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="4" Text="FIDO U2F"/>
-                        <TextBlock Grid.Row="1" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDOU2F}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="PIN Retries"/>
+                            <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PINRetries}"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="4" Text="FIDO2"/>
-                        <TextBlock Grid.Row="2" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDO2}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="4" Text="OTP"/>
+                            <TextBox Grid.Row="0" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OTP}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="4" Text="Open PGP"/>
-                        <TextBlock Grid.Row="3" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OpenPGP}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="4" Text="FIDO U2F"/>
+                            <TextBox Grid.Row="1" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDOU2F}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="4" Text="PIV"/>
-                        <TextBlock Grid.Row="4" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_PIV}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="4" Text="FIDO2"/>
+                            <TextBox Grid.Row="2" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDO2}"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="4" Text="OATH"/>
-                        <TextBlock Grid.Row="5" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OATH}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="4" Text="Open PGP"/>
+                            <TextBox Grid.Row="3" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OpenPGP}"/>
 
-                    </Grid>
-                </GroupBox>
+                            <TextBlock Grid.Row="4" Grid.Column="4" Text="PIV"/>
+                            <TextBox Grid.Row="4" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_PIV}"/>
 
-                <GroupBox Grid.Column="1" Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.slot9a.InUse, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
-                                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
-                            </Border>
-                            <TextBlock Text="Slot 9a: PIV Authentication" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="5" Grid.Column="4" Text="OATH"/>
+                            <TextBox Grid.Row="5" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OATH}"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
-                        <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Algorithm}"/>
+                        </Grid>
+                    </GroupBox>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
-                        <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.SubjectDN}"/>
+                    <GroupBox>
+                        <GroupBox.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
+                                    <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
+                                </Border>
+                                <TextBlock Text="Slot 9a: PIV Authentication" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
+                            </StackPanel>
+                        </GroupBox.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
-                        <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.IssuerDN}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
+                            <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Algorithm}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
-                        <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_before}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
+                            <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.SubjectDN}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
-                        <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_after}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
+                            <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.IssuerDN}"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
-                        <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Fingerprint}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
+                            <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_before}"/>
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
-                        <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Serial}"/>
-                    </Grid>
-                </GroupBox>
-                <GroupBox Grid.Column="2" Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.slot9c.InUse, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
-                                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
-                            </Border>
-                            <TextBlock Text="Slot 9c: Digital Signature" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
+                            <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_after}"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
-                        <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Algorithm}"/>
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
+                            <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Fingerprint}"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
-                        <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.SubjectDN}"/>
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
+                            <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Serial}"/>
+                        </Grid>
+                    </GroupBox>
+                    <GroupBox>
+                        <GroupBox.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
+                                    <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
+                                </Border>
+                                <TextBlock Text="Slot 9c: Digital Signature" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
+                            </StackPanel>
+                        </GroupBox.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
-                        <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.IssuerDN}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
+                            <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Algorithm}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
-                        <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_before}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
+                            <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.SubjectDN}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
-                        <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_after}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
+                            <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.IssuerDN}"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
-                        <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Fingerprint}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
+                            <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_before}"/>
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
-                        <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Serial}"/>
-                    </Grid>
-                </GroupBox>
-            </StackPanel>
-        </ScrollViewer>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
+                            <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_after}"/>
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
+                            <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Fingerprint}"/>
+
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
+                            <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Serial}"/>
+                        </Grid>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </GroupBox>
+
 
         <GroupBox Grid.Row="1" Grid.RowSpan="2" Grid.Column="1" Margin="10">
         <GroupBox.Header>
@@ -1758,9 +1997,18 @@ Function Write-Log
         </GroupBox.Header>
             <Grid>
                 <StackPanel Orientation="Vertical">
-                    <Button Content="Enroll New Card" Name="btnShowEnrollWindow" Margin="4"/>
-                    <Button Content="Retrieve Pending" Name="btnShowRequestPendingWindow" Margin="4"/>
-                    <Button Content="Advanced Request" Name="btnShowAdvReqWindow" Margin="4"/>
+                    <Button Name="btnShowEnrollWindow" Margin="4">
+                        <StackPanel Orientation="Horizontal" Width="150">
+                            <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource requestIcon}"/>
+                            <TextBlock Text="Enroll certificate"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Name="btnShowRequestPendingWindow" Margin="4">
+                        <StackPanel Orientation="Horizontal" Width="150">
+                            <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource retrieveIcon}"/>
+                            <TextBlock Text="Retrieve Pending"/>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
 
                 <StackPanel Orientation="Vertical" VerticalAlignment="Bottom">
@@ -1772,192 +2020,18 @@ Function Write-Log
                         <Button Content="Reset PIV" Width="100" Margin="4" Name="btnResetPiv"/>
                         <Button Content="Unblock PIN" Width="100" Margin="4" Name="btnUnblockPin"/>
                     </StackPanel>
-
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Modes" Width="100" Margin="4" Name="btnModes"/>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </GroupBox>
 
         <Grid Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Margin="10,0,10,10">
-            <TextBlock HorizontalAlignment="Center" Name="txtResult" Margin="10,2,10,0" TextAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock HorizontalAlignment="Center" Name="txtCA" Margin="10,2,10,0" TextAlignment="Center" VerticalAlignment="Center"/>
             <ProgressBar IsIndeterminate="True" Name="ProgressBar" Height="25" VerticalAlignment="Top" Visibility="{Binding ElementName=ProgressBar,Path=IsIndeterminate, Converter={StaticResource VisCon}}"/>
             <TextBlock HorizontalAlignment="Center" Name="txtStatus" Margin="10,2,10,0" TextAlignment="Center" VerticalAlignment="Center" Visibility="{Binding ElementName=ProgressBar,Path=IsIndeterminate, Converter={StaticResource VisCon}}"/>
         </Grid>
-    </Grid>
-
-</Window>
-
-"@
-[xml]$xaml_AdvReqWindow = @"
-
-<Window
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    x:Name="AdvReqWindow"
-    Title="" Height="425" Width="425">
-
-    <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="VisCon"/>
-
-        <SolidColorBrush x:Key="iconColor">#336699</SolidColorBrush>
-        <!-- Material Design Icons -->
-        <Geometry x:Key="searchIcon">M15.5,12C18,12 20,14 20,16.5C20,17.38 19.75,18.21 19.31,18.9L22.39,22L21,23.39L17.88,20.32C17.19,20.75 16.37,21 15.5,21C13,21 11,19 11,16.5C11,14 13,12 15.5,12M15.5,14A2.5,2.5 0 0,0 13,16.5A2.5,2.5 0 0,0 15.5,19A2.5,2.5 0 0,0 18,16.5A2.5,2.5 0 0,0 15.5,14M10,4A4,4 0 0,1 14,8C14,8.91 13.69,9.75 13.18,10.43C12.32,10.75 11.55,11.26 10.91,11.9L10,12A4,4 0 0,1 6,8A4,4 0 0,1 10,4M2,20V18C2,15.88 5.31,14.14 9.5,14C9.18,14.78 9,15.62 9,16.5C9,17.79 9.38,19 10,20H2Z</Geometry>
-        <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
-        <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
-
-        <!-- ModernUI Icons Icons -->
-        <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
-        <Geometry x:Key="backIcon">F1 M 57,42L 57,34L 32.25,34L 42.25,24L 31.75,24L 17.75,38L 31.75,52L 42.25,52L 32.25,42L 57,42 Z </Geometry>
-        <Geometry x:Key="reloadIcon">F1 M 38,20.5833C 42.9908,20.5833 47.4912,22.6825 50.6667,26.046L 50.6667,17.4167L 55.4166,22.1667L 55.4167,34.8333L 42.75,34.8333L 38,30.0833L 46.8512,30.0833C 44.6768,27.6539 41.517,26.125 38,26.125C 31.9785,26.125 27.0037,30.6068 26.2296,36.4167L 20.6543,36.4167C 21.4543,27.5397 28.9148,20.5833 38,20.5833 Z M 38,49.875C 44.0215,49.875 48.9963,45.3932 49.7703,39.5833L 55.3457,39.5833C 54.5457,48.4603 47.0852,55.4167 38,55.4167C 33.0092,55.4167 28.5088,53.3175 25.3333,49.954L 25.3333,58.5833L 20.5833,53.8333L 20.5833,41.1667L 33.25,41.1667L 38,45.9167L 29.1487,45.9167C 31.3231,48.3461 34.483,49.875 38,49.875 Z </Geometry>
-        <Geometry x:Key="cardIcon">F1 M 23.75,22.1667L 52.25,22.1667C 55.7478,22.1667 58.5833,25.0022 58.5833,28.5L 58.5833,47.5C 58.5833,50.9978 55.7478,53.8333 52.25,53.8333L 23.75,53.8333C 20.2522,53.8333 17.4167,50.9978 17.4167,47.5L 17.4167,28.5C 17.4167,25.0022 20.2522,22.1667 23.75,22.1667 Z M 57,42.75L 19,42.75L 19,45.9167C 19,47.0702 19.3084,48.1518 19.8473,49.0833L 56.1527,49.0833C 56.6916,48.1518 57,47.0702 57,45.9167L 57,42.75 Z M 20.5833,25.3333L 20.5833,31.6667L 26.9167,31.6667L 26.9167,25.3333L 20.5833,25.3333 Z </Geometry>
-        <Geometry x:Key="infoIcon">F1 M 31.6666,30.0834L 42.7499,30.0834L 42.7499,33.2501L 42.7499,52.2501L 45.9165,52.2501L 45.9165,57.0001L 31.6666,57.0001L 31.6666,52.2501L 34.8332,52.2501L 34.8332,34.8335L 31.6666,34.8335L 31.6666,30.0834 Z M 38.7917,19C 40.9778,19 42.75,20.7722 42.75,22.9583C 42.75,25.1445 40.9778,26.9167 38.7917,26.9167C 36.6055,26.9167 34.8333,25.1445 34.8333,22.9583C 34.8333,20.7722 36.6055,19 38.7917,19 Z </Geometry>
-
-        <Style TargetType="{x:Type TextBlock}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-        </Style>
-        <Style TargetType="{x:Type PasswordBox}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-            <Setter Property="Width" Value="90"/>
-        </Style>
-        <Style TargetType="{x:Type TextBox}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-        </Style>
-        <Style TargetType="{x:Type Button}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-        </Style>
-        <Style TargetType="{x:Type ComboBox}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-        </Style>
-        <Style TargetType="{x:Type CheckBox}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-        </Style>
-    </Window.Resources>
-
-    <Grid Name="AdvancedRequestGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowRequestGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="120"/>
-            <ColumnDefinition Width="10"/>
-            <ColumnDefinition Width="240"/>
-            <ColumnDefinition Width="Auto"/>
-        </Grid.ColumnDefinitions>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="8"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="20"/>
-        </Grid.RowDefinitions>
-        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Advanced request" FontSize="16"/>
-        <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="2" Text="Reset PIV"/>
-        <CheckBox Grid.Column="2" Grid.Row="2" Name="chkReset" VerticalAlignment="Center"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="3" Text="Template"/>
-        <ComboBox Grid.Column="2" Grid.Row="3" Width="Auto" Name="cmbTemplates" DisplayMemberPath="DisplayName" HorizontalAlignment="Stretch"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="4" Text="Signing certificate" FontSize="12" Name="AdvReqSigningCertTextBlock">
-            <TextBlock.Style>
-                <Style TargetType="TextBlock">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding ElementName=cmbTemplates, Path=SelectedItem.RequiredSignatures, FallbackValue=0}" Value="0">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </TextBlock.Style>
-        </TextBlock>
-        <ComboBox Grid.Column="2" Grid.Row="4" Name="cmbSigningCerts" DisplayMemberPath="Description" Visibility="{Binding ElementName=AdvReqSigningCertTextBlock, Path=Visibility}"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="5" Text="Subject" Visibility="{Binding ElementName=AdvReqSigningCertTextBlock, Path=Visibility}"/>
-        <Grid Grid.Column="2" Grid.Row="5" Visibility="{Binding ElementName=AdvReqSigningCertTextBlock, Path=Visibility}">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBox Grid.Column="0" Name="txtSubject" IsReadOnly="True" HorizontalAlignment="Stretch"/>
-
-            <Button Grid.Column="1" Height="25" Width="25" HorizontalAlignment="Right" VerticalAlignment="Top" Name="btnShowFindUsersWindow" ToolTip="Find user" Background="Transparent" Margin="2,2,0,2">
-                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource searchIcon}"/>
-            </Button>
-        </Grid>
-
-        <TextBlock Grid.Column="0" Grid.Row="6" Text="Target Slot"/>
-        <ComboBox Grid.Column="2" Grid.Row="6" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0">
-            <ComboBoxItem Content="Slot 9a: PIV Authentication" Tag="9a"/>
-            <ComboBoxItem Content="Slot 9c: Digital Signature" Tag="9c"/>
-            <ComboBoxItem Content="Slot 9d: Key Management" Tag="9d"/>
-            <ComboBoxItem Content="Slot 9e: Card Authentication" Tag="9e"/>
-            <ComboBoxItem Content="Slot f9: Attestation" Tag="f9"/>
-        </ComboBox>
-
-        <TextBlock Grid.Column="0" Grid.Row="7" Text="Key Touch Policy"/>
-        <ComboBox Grid.Column="2" Grid.Row="7"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
-            <ComboBoxItem Content="ALWAYS"/>
-            <ComboBoxItem Content="NEVER"/>
-            <ComboBoxItem Content="CACHED"/>
-        </ComboBox>
-
-        <TextBlock Grid.Column="0" Grid.Row="8" Text="Key PIN Policy"/>
-        <ComboBox Grid.Column="2" Grid.Row="8"  HorizontalAlignment="Stretch" SelectedIndex="0" Name="cmbKeyPinPolicy">
-            <ComboBoxItem Content="DEFAULT"/>
-            <ComboBoxItem Content="NEVER"/>
-            <ComboBoxItem Content="ONCE"/>
-            <ComboBoxItem Content="ALWAYS"/>
-        </ComboBox>
-
-        <TextBlock Grid.Column="0" Grid.Row="9" Text="Key Algorithm"/>
-        <ComboBox Grid.Column="2" Grid.Row="9"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyAlgo">
-            <ComboBoxItem Content="TDES"/>
-            <ComboBoxItem Content="RSA1024"/>
-            <ComboBoxItem Content="RSA2048"/>
-            <ComboBoxItem Content="ECCP256"/>
-            <ComboBoxItem Content="ECCP384"/>
-        </ComboBox>
-
-        <TextBlock Grid.Column="0" Grid.Row="10" Text="CCID Only Mode"/>
-        <CheckBox Grid.Column="2" Grid.Row="10" Name="RequestNewSetCCIDOnlyMode" VerticalAlignment="Center"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="13">
-            <TextBlock.Style>
-                <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding ElementName=chkReset,Path=IsChecked}" Value="False">
-                            <Setter Property="Text" Value="Current PIN"/>
-                        </DataTrigger>
-                        <DataTrigger Binding="{Binding ElementName=chkReset,Path=IsChecked}" Value="True">
-                            <Setter Property="Text" Value="New PIN"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </TextBlock.Style>
-        </TextBlock>
-        <PasswordBox Grid.Column="2" Grid.Row="13" Name="pwdPin1" HorizontalAlignment="Left"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="14" Text="New PIN (Again)" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
-        <PasswordBox Grid.Column="2" Grid.Row="14" Name="pwdPin2" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
-
-        <Button Grid.Column="2" Grid.Row="16" Name="btnEnroll" Content="Enroll" Width="90" HorizontalAlignment="Right"/>
-
     </Grid>
 
 </Window>
@@ -2053,184 +2127,76 @@ Function Write-Log
         <TextBlock Grid.Column="0" Grid.Row="6" Text="Current PIN"/>
         <PasswordBox Grid.Column="2" Grid.Row="6" Name="pwdPin" HorizontalAlignment="Left"/>
 
-        <Button Grid.Column="2" Grid.Row="8" Name="btnEnroll" Content="Retrieve" Width="90" HorizontalAlignment="Right"/>
+        <StackPanel Grid.Column="2" Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Retrieve" Width="90"/>
+            <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
+        </StackPanel>
+
+
     </Grid>
 
 
 </Window>
 
 "@
-[xml]$xaml_CardOperationsWindow = @"
+[xml]$xaml_FindUsersWindow = @"
 
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    x:Name="RequestPendingWindow"
-    Title="" Height="225" Width="425">
+    x:Name="FindUsersWindow"
+    Title="" Height="500" Width="725">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="VisCon"/>
 
-        <SolidColorBrush x:Key="iconColor">#336699</SolidColorBrush>
-        <!-- Material Design Icons -->
-        <Geometry x:Key="searchIcon">M15.5,12C18,12 20,14 20,16.5C20,17.38 19.75,18.21 19.31,18.9L22.39,22L21,23.39L17.88,20.32C17.19,20.75 16.37,21 15.5,21C13,21 11,19 11,16.5C11,14 13,12 15.5,12M15.5,14A2.5,2.5 0 0,0 13,16.5A2.5,2.5 0 0,0 15.5,19A2.5,2.5 0 0,0 18,16.5A2.5,2.5 0 0,0 15.5,14M10,4A4,4 0 0,1 14,8C14,8.91 13.69,9.75 13.18,10.43C12.32,10.75 11.55,11.26 10.91,11.9L10,12A4,4 0 0,1 6,8A4,4 0 0,1 10,4M2,20V18C2,15.88 5.31,14.14 9.5,14C9.18,14.78 9,15.62 9,16.5C9,17.79 9.38,19 10,20H2Z</Geometry>
-        <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
-        <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
-
-        <!-- ModernUI Icons Icons -->
-        <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
-        <Geometry x:Key="backIcon">F1 M 57,42L 57,34L 32.25,34L 42.25,24L 31.75,24L 17.75,38L 31.75,52L 42.25,52L 32.25,42L 57,42 Z </Geometry>
-        <Geometry x:Key="reloadIcon">F1 M 38,20.5833C 42.9908,20.5833 47.4912,22.6825 50.6667,26.046L 50.6667,17.4167L 55.4166,22.1667L 55.4167,34.8333L 42.75,34.8333L 38,30.0833L 46.8512,30.0833C 44.6768,27.6539 41.517,26.125 38,26.125C 31.9785,26.125 27.0037,30.6068 26.2296,36.4167L 20.6543,36.4167C 21.4543,27.5397 28.9148,20.5833 38,20.5833 Z M 38,49.875C 44.0215,49.875 48.9963,45.3932 49.7703,39.5833L 55.3457,39.5833C 54.5457,48.4603 47.0852,55.4167 38,55.4167C 33.0092,55.4167 28.5088,53.3175 25.3333,49.954L 25.3333,58.5833L 20.5833,53.8333L 20.5833,41.1667L 33.25,41.1667L 38,45.9167L 29.1487,45.9167C 31.3231,48.3461 34.483,49.875 38,49.875 Z </Geometry>
-        <Geometry x:Key="cardIcon">F1 M 23.75,22.1667L 52.25,22.1667C 55.7478,22.1667 58.5833,25.0022 58.5833,28.5L 58.5833,47.5C 58.5833,50.9978 55.7478,53.8333 52.25,53.8333L 23.75,53.8333C 20.2522,53.8333 17.4167,50.9978 17.4167,47.5L 17.4167,28.5C 17.4167,25.0022 20.2522,22.1667 23.75,22.1667 Z M 57,42.75L 19,42.75L 19,45.9167C 19,47.0702 19.3084,48.1518 19.8473,49.0833L 56.1527,49.0833C 56.6916,48.1518 57,47.0702 57,45.9167L 57,42.75 Z M 20.5833,25.3333L 20.5833,31.6667L 26.9167,31.6667L 26.9167,25.3333L 20.5833,25.3333 Z </Geometry>
-        <Geometry x:Key="infoIcon">F1 M 31.6666,30.0834L 42.7499,30.0834L 42.7499,33.2501L 42.7499,52.2501L 45.9165,52.2501L 45.9165,57.0001L 31.6666,57.0001L 31.6666,52.2501L 34.8332,52.2501L 34.8332,34.8335L 31.6666,34.8335L 31.6666,30.0834 Z M 38.7917,19C 40.9778,19 42.75,20.7722 42.75,22.9583C 42.75,25.1445 40.9778,26.9167 38.7917,26.9167C 36.6055,26.9167 34.8333,25.1445 34.8333,22.9583C 34.8333,20.7722 36.6055,19 38.7917,19 Z </Geometry>
-
         <Style TargetType="{x:Type TextBlock}">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-        </Style>
-        <Style TargetType="{x:Type PasswordBox}">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
-            <Setter Property="Width" Value="90"/>
         </Style>
         <Style TargetType="{x:Type TextBox}">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
         </Style>
         <Style TargetType="{x:Type Button}">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type ListBox}">
+            <Setter Property="FontSize" Value="12"/>
         </Style>
         <Style TargetType="{x:Type ComboBox}">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
         </Style>
         <Style TargetType="{x:Type CheckBox}">
             <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Margin" Value="0,2,0,2"/>
         </Style>
 
     </Window.Resources>
-
     <Grid>
-        <Grid Grid.Row="1" Name="grdChangePin" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="120"/>
-                <ColumnDefinition Width="10"/>
-                <ColumnDefinition Width="240"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="8"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Change PIN" FontSize="16"/>
-            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="10,0,10,0">
+            <TextBlock Text="User: " VerticalAlignment="Center"/>
+            <TextBox Name="SearchTextBox" Width="100"/>
+            <Button Content="Search" Height="25" Name="SearchButton" Margin="5,0,0,0"/>
+        </StackPanel>
 
-            <TextBlock Grid.Column="0" Grid.Row="2" Text="Current PIN"/>
-            <PasswordBox Grid.Column="2" Grid.Row="2" Name="pwdChangePinPin" HorizontalAlignment="Left"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="3" Text="New PIN"/>
-            <PasswordBox Grid.Column="2" Grid.Row="3" Name="pwdChangePinPin1" HorizontalAlignment="Left"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="4" Text="New PIN (Again)"/>
-            <PasswordBox Grid.Column="2" Grid.Row="4" Name="pwdChangePinPin2" HorizontalAlignment="Left"/>
-
-            <Button Grid.Column="2" Grid.Row="5" Name="btnChangePin" Content="Ok" Width="90" HorizontalAlignment="Right"/>
-        </Grid>
-
-        <Grid Grid.Row="1" Name="grdChangePuk" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="120"/>
-                <ColumnDefinition Width="10"/>
-                <ColumnDefinition Width="240"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="8"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Change PUK" FontSize="16"/>
-            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="2" Text="Current PUK"/>
-            <PasswordBox Grid.Column="2" Grid.Row="2" Name="pwdChangePukPuk" HorizontalAlignment="Left"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="3" Text="New PUK"/>
-            <PasswordBox Grid.Column="2" Grid.Row="3" Name="pwdChangePukPuk1" HorizontalAlignment="Left"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="4" Text="New PUK (Again)"/>
-            <PasswordBox Grid.Column="2" Grid.Row="4" Name="pwdChangePukPuk2" HorizontalAlignment="Left"/>
-
-            <Button Grid.Column="2" Grid.Row="5" Name="btnChangePuk" Content="Ok" Width="90" HorizontalAlignment="Right"/>
-        </Grid>
-
-        <Grid Grid.Row="1" Name="grdUnblockPin" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="120"/>
-                <ColumnDefinition Width="10"/>
-                <ColumnDefinition Width="240"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="8"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Unblock PIN" FontSize="16"/>
-            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="2" Text="Current PUK"/>
-            <PasswordBox Grid.Column="2" Grid.Row="2" Name="pwdUnblockPinPuk" HorizontalAlignment="Left"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="3" Text="New PIN"/>
-            <PasswordBox Grid.Column="2" Grid.Row="3" Name="pwdUnblockPinPin1" HorizontalAlignment="Left"/>
-
-            <TextBlock Grid.Column="0" Grid.Row="4" Text="New PIN (Again)"/>
-            <PasswordBox Grid.Column="2" Grid.Row="4" Name="pwdUnblockPinPin2" HorizontalAlignment="Left"/>
-
-            <Button Grid.Column="2" Grid.Row="5" Name="btnUnblockPin" Content="Ok" Width="90" HorizontalAlignment="Right"/>
-        </Grid>
-
-         <Grid Grid.Row="1" Name="grdResetPiv" Visibility="Collapsed" Width="380" Margin="10,10,10,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="120"/>
-                <ColumnDefinition Width="10"/>
-                <ColumnDefinition Width="240"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="8"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-            </Grid.RowDefinitions>
-
-            <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Reset PIV" FontSize="16"/>
-            <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
-
-            <Button Grid.Column="2" Grid.Row="5" Name="btnResetPiv" Content="Ok" Width="90" HorizontalAlignment="Right"/>
-        </Grid>
+        <!--<ScrollViewer Grid.Row="4">-->
+            <DataGrid ScrollViewer.CanContentScroll="True"  ScrollViewer.HorizontalScrollBarVisibility="Auto" Grid.Row="4" IsReadOnly="True" ColumnWidth="*" HorizontalAlignment="Stretch" Name="DataGrid" AutoGenerateColumns="True" SelectionMode="Single" Margin="10,10,10,0"/>
+        <!--</ScrollViewer>-->
+        <TextBlock Name="CountTextBlock" Grid.Column="0" Grid.ColumnSpan="4" Grid.Row="5" Margin="0,0,10,2" HorizontalAlignment="Right"/>
+        <StackPanel Grid.Column="0" HorizontalAlignment="Center" Grid.Row="6" Orientation="Horizontal">
+            <ToggleButton Content="Ok" Width="60" Height="25" Name="OkButton" Margin="10"/>
+            <Button Content="Cancel" Width="60" Height="25" Name="CancelButton" Margin="10"/>
+        </StackPanel>
 
     </Grid>
-
-
 </Window>
 
 "@
@@ -2242,9 +2208,9 @@ Show-MainWindow
 
 #######################################################################
 #                                                                     #
-# Merged by user: administrator                                       #
-# On computer:    DC01                                                #
-# Date:           2021-02-13 23:12:04                                 #
+# Merged by user: todag                                               #
+# On computer:    HV-CL01                                             #
+# Date:           2021-02-16 20:28:01                                 #
 # No code signing certificate found!                                  #
 #                                                                     #
 #######################################################################

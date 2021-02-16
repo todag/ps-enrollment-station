@@ -12,26 +12,33 @@ function Show-RequestPendingWindow(){
         $Win.$($_.Name) = $Win.Window.FindName($_.Name)
     }
 
-    $Win.btnEnroll.Add_Click({
-        try{
-            $r = Request-Certificate -Id $Win.txtId.Text
-            Write-host "lll"
-            $r
-            if($r.pending) {
-                [System.Windows.MessageBox]::Show("Certificate request is still pending CA Manager approval.`nRequest id: $($r.id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($r.id)"
-            } else {
-                Import-Certificate -Card $card -pin $Win.pwdPin.Password -slot ($Win.cmbSlot.SelectedItem).Tag
-                Reset-Chuid -Card $card -pin $Win.pwdPin.Password
-                Set-ResultText -Success "Enrollment succeeded"
-            }
-            $r
-        } catch {
-            Set-ResultText -Failed "Request failed!"
-            [System.Windows.MessageBox]::Show((Hide-Secrets -String $_), "Error", 'Ok', 'Error') | Out-Null
-        }
-
+    $Win.btnCancel.add_Click({
+        $Win.Window.Close()
     })
 
+    $Win.btnEnroll.Add_Click({
+        try{
+            $Id = $Win.txtId.Text
+            $Slot = $Win.cmbSlot.SelectedItem.Tag
+            $Pin = $Win.pwdPin.Password
+
+            $request = Request-Certificate -Id $Id
+
+            if($request.ReturnCode -eq 5) {
+                [System.Windows.MessageBox]::Show("Certificate request is still pending CA Manager approval.`nRequest id: $($Id)", "Information", 'Ok', 'Information') | Out-Null
+                Set-ResultText -Success "Enrollment pending approval, id: $($Id)"
+                return
+            } elseif($request.ReturnCode -eq 3) {
+                Import-Certificate -Card $Card -Pin $Pin -Slot $Slot -CertBase64 $request.Base64
+                Reset-Chuid -Card $Card -Pin $Pin
+                [System.Windows.MessageBox]::Show("Certificate enrolled successfully!", "Information", 'Ok', 'Information') | Out-Null
+                [System.Windows.MessageBox]::Show("The Card Holder Unique Identifier (CHUID) has been reset.`n`nYou should remove and reinsert the key before enrolling other certificates or doing any signing operations.", "Information", 'Ok', 'Information') | Out-Null
+            } else {
+                throw "Unexpected return code [$($request.ReturnCode)] while requesting certificate."
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Request failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
+        }
+    })
     $Win.Window.ShowDialog()
 }

@@ -13,6 +13,12 @@
         <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
         <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
         <Geometry x:Key="certificateIcon">M13 21L15 20L17 21V14H13M17 9V7L15 8L13 7V9L11 10L13 11V13L15 12L17 13V11L19 10M20 3H4A2 2 0 0 0 2 5V15A2 2 0 0 0 4 17H11V15H4V5H20V15H19V17H20A2 2 0 0 0 22 15V5A2 2 0 0 0 20 3M11 8H5V6H11M9 11H5V9H9M11 14H5V12H11Z</Geometry>
+        <Geometry x:Key="requestIcon">M20 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H13.09A5.47 5.47 0 0 1 13 19A6 6 0 0 1 19 13A5.88 5.88 0 0 1 22 13.81V6A2 2 0 0 0 20 4M20 11H4V8H20M20 15V18H23V20H20V23H18V20H15V18H18V15Z</Geometry>
+        <Geometry x:Key="requestIcon2">M21,18H24V20H21V23H19V20H16V18H19V15H21V18M19,8V6H3V8H19M19,12H3V18H14V20H3C1.89,20 1,19.1 1,18V6C1,4.89 1.89,4 3,4H19A2,2 0 0,1 21,6V13H19V12Z</Geometry>
+
+        <Geometry x:Key="retrieveIcon">M20 4H4C2.9 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 14.91 14.41 12 18 12C19.5 12 20.9 12.53 22 13.4V6C22 4.89 21.11 4 20 4M20 11H4V8H20V11M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
+        <Geometry x:Key="retrieveIcon2">M20 4H4C2.89 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 18.33 11.5 18.17 11.53 18H4V12H20V12.32C20.74 12.56 21.41 12.93 22 13.4V6C22 4.89 21.1 4 20 4M20 8H4V6H20V8M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
+
 
         <!-- ModernUI Icons Icons -->
         <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
@@ -200,174 +206,182 @@
                 </Grid>
             </GroupBox>
 
-        <ScrollViewer Grid.Column="0" Grid.Row="2" Margin="10" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" CanContentScroll="True">
-            <StackPanel>
-                <GroupBox Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.CardOk, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <Border Grid.Column="0" Grid.RowSpan="2" Margin="0,0,2,0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
-                                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource cardIcon}"/>
-                            </Border>
-                            <TextBlock Text="Card info" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="16"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Serial number"/>
-                        <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.SerialNumber}"/>
+        <GroupBox Grid.Column="0" Grid.Row="2" Margin="10" Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.CardOk, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
+        <GroupBox.Header>
+            <TextBlock Text="Selected Card" FontWeight="Bold"/>
+        </GroupBox.Header>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="PIV Version"/>
-                        <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PIV_Version}"/>
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" CanContentScroll="True">
+                <StackPanel>
+                    <GroupBox>
+                        <GroupBox.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Grid.Column="0" Grid.RowSpan="2" Margin="0,0,2,0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
+                                    <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource cardIcon}"/>
+                                </Border>
+                                <TextBlock Text="Card info" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
+                            </StackPanel>
+                        </GroupBox.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="16"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Firmware Version"/>
-                        <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.FirmwareVersion}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Serial number"/>
+                            <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.SerialNumber}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Modes"/>
-                        <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.Modes}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="PIV Version"/>
+                            <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PIV_Version}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="PIN Retries"/>
-                        <TextBlock Grid.Row="4" Grid.Column="2" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PINRetries}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Firmware Version"/>
+                            <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.FirmwareVersion}"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="4" Text="OTP"/>
-                        <TextBlock Grid.Row="0" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OTP}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Modes"/>
+                            <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.Modes}"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="4" Text="FIDO U2F"/>
-                        <TextBlock Grid.Row="1" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDOU2F}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="PIN Retries"/>
+                            <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.PINRetries}"/>
 
-                        <TextBlock Grid.Row="2" Grid.Column="4" Text="FIDO2"/>
-                        <TextBlock Grid.Row="2" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDO2}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="4" Text="OTP"/>
+                            <TextBox Grid.Row="0" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OTP}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="4" Text="Open PGP"/>
-                        <TextBlock Grid.Row="3" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OpenPGP}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="4" Text="FIDO U2F"/>
+                            <TextBox Grid.Row="1" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDOU2F}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="4" Text="PIV"/>
-                        <TextBlock Grid.Row="4" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_PIV}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="4" Text="FIDO2"/>
+                            <TextBox Grid.Row="2" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_FIDO2}"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="4" Text="OATH"/>
-                        <TextBlock Grid.Row="5" Grid.Column="6" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OATH}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="4" Text="Open PGP"/>
+                            <TextBox Grid.Row="3" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OpenPGP}"/>
 
-                    </Grid>
-                </GroupBox>
+                            <TextBlock Grid.Row="4" Grid.Column="4" Text="PIV"/>
+                            <TextBox Grid.Row="4" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_PIV}"/>
 
-                <GroupBox Grid.Column="1" Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.slot9a.InUse, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
-                                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
-                            </Border>
-                            <TextBlock Text="Slot 9a: PIV Authentication" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="5" Grid.Column="4" Text="OATH"/>
+                            <TextBox Grid.Row="5" Grid.Column="6" IsReadOnly="True" BorderThickness="0" Text="{Binding ElementName=lstReaders, Path=SelectedItem.App_OATH}"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
-                        <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Algorithm}"/>
+                        </Grid>
+                    </GroupBox>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
-                        <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.SubjectDN}"/>
+                    <GroupBox>
+                        <GroupBox.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
+                                    <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
+                                </Border>
+                                <TextBlock Text="Slot 9a: PIV Authentication" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
+                            </StackPanel>
+                        </GroupBox.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
-                        <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.IssuerDN}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
+                            <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Algorithm}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
-                        <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_before}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
+                            <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.SubjectDN}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
-                        <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_after}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
+                            <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.IssuerDN}"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
-                        <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Fingerprint}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
+                            <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_before}"/>
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
-                        <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Serial}"/>
-                    </Grid>
-                </GroupBox>
-                <GroupBox Grid.Column="2" Visibility="{Binding ElementName=lstReaders,Path=SelectedItem.slot9c.InUse, FallbackValue=Collapsed, Converter={StaticResource VisCon}}">
-                    <GroupBox.Header>
-                        <StackPanel Orientation="Horizontal">
-                            <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
-                                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
-                            </Border>
-                            <TextBlock Text="Slot 9c: Digital Signature" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
-                        </StackPanel>
-                    </GroupBox.Header>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="8"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                        </Grid.RowDefinitions>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
+                            <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Not_after}"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
-                        <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Algorithm}"/>
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
+                            <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Fingerprint}"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
-                        <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.SubjectDN}"/>
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
+                            <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9a.Serial}"/>
+                        </Grid>
+                    </GroupBox>
+                    <GroupBox>
+                        <GroupBox.Header>
+                            <StackPanel Orientation="Horizontal">
+                                <Border Grid.Column="0" VerticalAlignment="Center" Height="25" Width="25" Background="Transparent" HorizontalAlignment="Center">
+                                    <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource certificateIcon}"/>
+                                </Border>
+                                <TextBlock Text="Slot 9c: Digital Signature" Margin="2,0,0,0" VerticalAlignment="Center" FontWeight="Bold"/>
+                            </StackPanel>
+                        </GroupBox.Header>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
-                        <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.IssuerDN}"/>
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Algorithm"/>
+                            <TextBox Grid.Row="0" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Algorithm}"/>
 
-                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
-                        <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_before}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Subject"/>
+                            <TextBox Grid.Row="1" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.SubjectDN}"/>
 
-                        <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
-                        <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_after}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Issuer"/>
+                            <TextBox Grid.Row="2" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.IssuerDN}"/>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
-                        <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Fingerprint}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Not before"/>
+                            <TextBox Grid.Row="3" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_before}"/>
 
-                        <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
-                        <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Serial}"/>
-                    </Grid>
-                </GroupBox>
-            </StackPanel>
-        </ScrollViewer>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Not after"/>
+                            <TextBox Grid.Row="4" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Not_after}"/>
+
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Fingerprint"/>
+                            <TextBox Grid.Row="5" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Fingerprint}"/>
+
+                            <TextBlock Grid.Row="6" Grid.Column="0" Text="Serial"/>
+                            <TextBox Grid.Row="6" Grid.Column="2" IsReadOnly="True" BorderThickness="0" HorizontalAlignment="Left" Text="{Binding ElementName=lstReaders, Path=SelectedItem.slot9c.Serial}"/>
+                        </Grid>
+                    </GroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </GroupBox>
+
 
         <GroupBox Grid.Row="1" Grid.RowSpan="2" Grid.Column="1" Margin="10">
         <GroupBox.Header>
@@ -375,9 +389,18 @@
         </GroupBox.Header>
             <Grid>
                 <StackPanel Orientation="Vertical">
-                    <Button Content="Enroll New Card" Name="btnShowEnrollWindow" Margin="4"/>
-                    <Button Content="Retrieve Pending" Name="btnShowRequestPendingWindow" Margin="4"/>
-                    <Button Content="Advanced Request" Name="btnShowAdvReqWindow" Margin="4"/>
+                    <Button Name="btnShowEnrollWindow" Margin="4">
+                        <StackPanel Orientation="Horizontal" Width="150">
+                            <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource requestIcon}"/>
+                            <TextBlock Text="Enroll certificate"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Name="btnShowRequestPendingWindow" Margin="4">
+                        <StackPanel Orientation="Horizontal" Width="150">
+                            <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource retrieveIcon}"/>
+                            <TextBlock Text="Retrieve Pending"/>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
 
                 <StackPanel Orientation="Vertical" VerticalAlignment="Bottom">
@@ -389,13 +412,15 @@
                         <Button Content="Reset PIV" Width="100" Margin="4" Name="btnResetPiv"/>
                         <Button Content="Unblock PIN" Width="100" Margin="4" Name="btnUnblockPin"/>
                     </StackPanel>
-
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="Modes" Width="100" Margin="4" Name="btnModes"/>
+                    </StackPanel>
                 </StackPanel>
             </Grid>
         </GroupBox>
 
         <Grid Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2" Margin="10,0,10,10">
-            <TextBlock HorizontalAlignment="Center" Name="txtResult" Margin="10,2,10,0" TextAlignment="Center" VerticalAlignment="Center"/>
+            <TextBlock HorizontalAlignment="Center" Name="txtCA" Margin="10,2,10,0" TextAlignment="Center" VerticalAlignment="Center"/>
             <ProgressBar IsIndeterminate="True" Name="ProgressBar" Height="25" VerticalAlignment="Top" Visibility="{Binding ElementName=ProgressBar,Path=IsIndeterminate, Converter={StaticResource VisCon}}"/>
             <TextBlock HorizontalAlignment="Center" Name="txtStatus" Margin="10,2,10,0" TextAlignment="Center" VerticalAlignment="Center" Visibility="{Binding ElementName=ProgressBar,Path=IsIndeterminate, Converter={StaticResource VisCon}}"/>
         </Grid>

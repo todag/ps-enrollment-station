@@ -48,8 +48,9 @@ function Show-MainWindow(){
         }
     }
 
-    $MainWindow.Window.add_ContentRendered( {        
+    $MainWindow.Window.add_ContentRendered( {
         $MainWindow.lstReaders.ItemsSource = Get-SmartCards
+        $MainWindow.txtCA.Text = $script:ca
     })
 
     $MainWindow.ReloadCardsButton.Add_Click({
@@ -59,12 +60,6 @@ function Show-MainWindow(){
     $MainWindow.btnShowEnrollWindow.Add_Click({
         if(Check-ValidCardIsSelected) {
            $result = Show-EnrollWindow -Card $MainWindow.lstReaders.SelectedItem
-        }
-    })
-
-    $MainWindow.btnShowAdvReqWindow.Add_Click({
-        if(Check-ValidCardIsSelected) {
-            Show-AdvReqWindow -Card $MainWindow.lstReaders.SelectedItem
         }
     })
 

@@ -60,7 +60,7 @@
                 # Hide secrets from output
                 #
                 $syncHash.result.stdout = Hide-Secrets -String $syncHash.result.stdout
-                $syncHash.result.stderr = Hide-Secrets -String $syncHash.result.stderr                
+                $syncHash.result.stderr = Hide-Secrets -String $syncHash.result.stderr
                 $arguments = Hide-Secrets -String $arguments
             }
             Catch {
@@ -72,7 +72,7 @@
     $object = $powershell.BeginInvoke()
 
     while (!$object.IsCompleted) {
-        Start-Sleep -Milliseconds 50
+        Start-Sleep -Milliseconds 10
         [System.Windows.Forms.Application]::DoEvents()
     }
 
@@ -82,10 +82,10 @@
     Write-Log -LogString "Return code: ---$($syncHash.result.ExitCode)---" -Severity Debug
 
     if (-Not ([string]::IsNullOrEmpty($syncHash.result.stdout))) {
-        Write-Log -LogString "Stdout: $($syncHash.result.stdout)" -Severity Debug
+        Write-Log -LogString "Stdout: $($syncHash.result.stdout.Trim())" -Severity Debug
     }
     if (-Not ([string]::IsNullOrEmpty($syncHash.result.stderr))) {
-        Write-Log -LogString "Stderr: $($syncHash.result.stderr)" -Severity Critical
+        Write-Log -LogString "Stderr: $($syncHash.result.stderr.Trim())" -Severity Critical
     }
 
     if($syncHash.result.ExitCode -ne 0) {

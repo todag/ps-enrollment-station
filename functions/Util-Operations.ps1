@@ -19,12 +19,13 @@ function Validate-Pin()
         [string]$Pin2
      )
      if(-not ($Pin1.ToString() -eq $Pin2.ToString())) {
-        throw "PINs not matching!"
+        return $false
      } elseif($Pin1.Contains(" ")) {
-        throw "PIN contains whitespace!"
+        return $false
      } elseif(($Pin1.Length -lt 6) -or $Pin1.Length -gt 8) {
-        throw "PIN length less than 4 or more than 8"
+        return $false
      }
+     return $true
 }
 
 function Validate-Puk()
@@ -48,12 +49,13 @@ function Validate-Puk()
         [string]$Puk2
      )
      if(-not ($Puk1.ToString() -eq $Puk2.ToString())) {
-        throw "PUKs not matching!"
+        return $false
      } elseif($Puk1.Contains(" ")) {
-        throw "PUK contains whitespace!"
+        return $false
      } elseif(($Puk1.Length -lt 6) -or $Puk1.Length -gt 8) {
-        throw "PUK length less than 4 or more than 8"
+        return $false
      }
+     return $true
 }
 
 
@@ -115,34 +117,4 @@ function Get-ADUsers() {
     }
     #$entries.Close() --<
     return ,$users
-}
-
-
-function Set-ResultText() {
-    <#
-    .SYNOPSIS
-        Sets the result text in the Main Window
-    .PARAMETER Success
-        Whether to mark the result text as successful (green)
-    .PARAMETER Failed
-        Whether to mark the result text as failure (red)
-    #>
-    param(
-        [Parameter(ParameterSetName = "Success")]
-        [AllowNull()]
-        [AllowEmptyString()]
-        [string]$Success,
-        [Parameter(ParameterSetName = "Failed")]
-        [AllowNull()]
-        [AllowEmptyString()]
-        [string]$Failed
-    )
-
-    if($Success) {
-        $MainWindow.txtResult.Text = $Success
-        $MainWindow.txtResult.Foreground  = "Green"
-    } else {
-        $MainWindow.txtResult.Text = $Failed
-        $MainWindow.txtResult.Foreground  = "Red"
-    }
 }
