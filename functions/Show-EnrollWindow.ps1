@@ -27,6 +27,9 @@ function Show-EnrollWindow(){
         $Win.Window.Close()
     })
 
+
+
+
     $Win.btnEnroll.Add_Click({
         # Get options from UI
         if($Win.cmbiNewCard.IsSelected -or $Win.chkReset.IsChecked) {
@@ -77,7 +80,6 @@ function Show-EnrollWindow(){
         }
 
         $SetCCIDOnlyMode = $Win.chkSetCCIDOnlyMode.IsChecked
-
 
         $opts = "Reset piv: $ResetPiv`nSlot: $Slot`nKey Algorithm: $KeyAlgo`nPIN Policy: $PinPolicy`nTouchPolicy: $TouchPolicy`nCertificate Template: $CertTemplate`nSigning Certificate: $SigningCert`nSubject: $Subject`nSet CCID only mode: $SetCCIDOnlyMode"
         Write-Log -Logstring "Attempting enroll will the following options:`n$opts" -Severity Debug
@@ -130,7 +132,6 @@ function Show-EnrollWindow(){
 
             if($request.ReturnCode -eq 5) {
                 [System.Windows.MessageBox]::Show("Certificate request is pending CA Manager approval.`nRequest id: $($request.Id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($request.Id)"
                 return
             } elseif($request.ReturnCode -eq 3) {
                 Import-Certificate -Card $Card -Pin $Pin -Slot $Slot -CertBase64 $request.Base64

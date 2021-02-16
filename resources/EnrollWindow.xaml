@@ -75,13 +75,13 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="8"/>
         </Grid.RowDefinitions>
-        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Enroll certificate" FontSize="16"/>
+        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Request certificate" FontSize="16"/>
         <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
 
         <TextBlock Grid.Column="0" Grid.Row="2" Text="Enrollment template"/>
         <ComboBox Grid.Column="2" Grid.Row="2" SelectedIndex="0" Name="cmbRequestType">
-            <ComboBoxItem Content="Wipe and enroll new card" Name="cmbiNewCard" Tag="newcard"/>
-            <ComboBoxItem Content="Advanced enrollment" Name="cmbiAdvRequest" Tag="advrequest"/>
+            <ComboBoxItem Content="Wipe and request" Name="cmbiNewCard" Tag="newcard"/>
+            <ComboBoxItem Content="Advanced request" Name="cmbiAdvRequest" Tag="advrequest"/>
         </ComboBox>
         <TextBlock Grid.Column="0" Grid.Row="3" Text="Certificate Template"/>
         <ComboBox Grid.Column="2" Grid.Row="3" Name="cmbTemplates" DisplayMemberPath="DisplayName"/>
@@ -100,7 +100,6 @@
         <ComboBox Grid.Column="2" Grid.Row="5" Name="cmbSigningCerts" DisplayMemberPath="Description" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
 
         <TextBlock Grid.Column="0" Grid.Row="6" Text="Subject" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
-
         <Grid Grid.Column="2" Grid.Row="6" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -112,14 +111,15 @@
             </Button>
         </Grid>
 
-        <!-- Only Show if Advanced request-->
+        <!-- Only Show if Advanced request -->
         <TextBlock Grid.Column="0" Grid.Row="7" Text="Reset PIV" Name="txtResetPiv" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
         <CheckBox Grid.Column="2" Grid.Row="7" Name="chkReset" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
 
+        <!-- Only Show if Advanced request -->
         <TextBlock Grid.Column="0" Grid.Row="8" Text="Set CCID only mode" Name="txtSetMode" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
         <CheckBox Grid.Column="2" Grid.Row="8" Name="chkSetCCIDOnlyMode" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
 
-
+        <!-- Only Show if Advanced request -->
         <TextBlock Grid.Column="0" Grid.Row="9" Text="Target Slot" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
         <ComboBox Grid.Column="2" Grid.Row="9" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
             <ComboBoxItem Content="Slot 9a: PIV Authentication" Tag="9a"/>
@@ -129,6 +129,7 @@
             <ComboBoxItem Content="Slot f9: Attestation" Tag="f9"/>
         </ComboBox>
 
+        <!-- Only Show if Advanced request -->
         <TextBlock Grid.Column="0" Grid.Row="10" Text="Key Algorithm" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
         <ComboBox Grid.Column="2" Grid.Row="10"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyAlgo" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
             <ComboBoxItem Content="TDES" Tag="TDES"/>
@@ -138,13 +139,14 @@
             <ComboBoxItem Content="ECCP384" Tag="ECCP384"/>
         </ComboBox>
 
-        <TextBlock Grid.Column="0" Grid.Row="11" Text="Key Touch Policy"/>
+        <TextBlock Grid.Column="0" Grid.Row="11" Text="Key Touch Policy" Name="txtTouchPolicy"/>
         <ComboBox Grid.Column="2" Grid.Row="11"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
             <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
             <ComboBoxItem Content="NEVER" Tag="NEVER"/>
             <ComboBoxItem Content="CACHED" Tag="CACHED"/>
         </ComboBox>
 
+        <!-- Only Show if Advanced request -->
         <TextBlock Grid.Column="0" Grid.Row="12" Text="Key PIN Policy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
         <ComboBox Grid.Column="2" Grid.Row="12"  HorizontalAlignment="Stretch" SelectedIndex="0" Name="cmbKeyPinPolicy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
             <ComboBoxItem Content="DEFAULT" Tag="DEFAULT"/>

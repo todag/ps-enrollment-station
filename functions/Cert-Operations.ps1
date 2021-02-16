@@ -71,11 +71,11 @@ function Request-Certificate()
         }
     }
 
-    if($r.ReturnCode -eq 0) { Write-Log -LogString ":: ReturnCode 0 foreign certificate" -Severity Debug }
-    if($r.ReturnCode -eq 2) { Write-Log -Logstring ":: ReturnCode 2 request denied " -Severity Debug }
-    if($r.ReturnCode -eq 3) { Write-Log -LogString ":: ReturnCode 3 certificate issued" -Severity Debug }
-    if($r.ReturnCode -eq 5) { Write-Log -LogString ":: ReturnCode 5 request pending" -Severity Debug }
-    if($r.ReturnCode -eq 6) { Write-Log -LogString ":: ReturnCode 6 certificate revoked" -Severity Debug }
+    if($r.ReturnCode -eq 0) { Write-Log -LogString ":: ReturnCode 0 foreign certificate" -Severity Notice }
+    if($r.ReturnCode -eq 2) { Write-Log -Logstring ":: ReturnCode 2 request denied " -Severity Notice }
+    if($r.ReturnCode -eq 3) { Write-Log -LogString ":: ReturnCode 3 certificate issued" -Severity Notice }
+    if($r.ReturnCode -eq 5) { Write-Log -LogString ":: ReturnCode 5 request pending" -Severity Notice }
+    if($r.ReturnCode -eq 6) { Write-Log -LogString ":: ReturnCode 6 certificate revoked" -Severity Notice }
 
     return ,$r
 }

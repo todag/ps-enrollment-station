@@ -42,6 +42,7 @@ function Add-XAML
     $xamlFiles = @{
         xaml_MainWindow = "MainWindow.xaml"
         xaml_EnrollWindow = "EnrollWindow.xaml"
+        xaml_RequestToFileWindow = "RequestToFileWindow.xaml"
         xaml_RequestPendingWindow = "RequestPendingWindow.xaml"
         xaml_FindUsersWindow = "FindUsersWindow.xaml"
         xaml_CardOperationsWindow = "CardOperationsWindow.xaml"

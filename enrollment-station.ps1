@@ -1,5 +1,5 @@
 Set-StrictMode -Version 2.0
-$appVersion = "0.2 - 2020-02-16"
+$appVersion = "0.3 - 2020-02-16"
 $appAbout = @"
 Enrollment Station v $($appVersion)
 
@@ -56,6 +56,7 @@ Get-ChildItem -Path "$($PSScriptRoot)\functions\*.ps1" -Exclude $($MyInvocation.
 #
 [xml]$xaml_MainWindow = Get-Content -Path "$($PSScriptRoot)\resources\MainWindow.xaml"
 [xml]$xaml_EnrollWindow = Get-Content -Path "$($PSScriptRoot)\resources\EnrollWindow.xaml"
+[xml]$xaml_RequestToFileWindow = Get-Content -Path "$($PSScriptRoot)\resources\RequestToFileWindow.xaml"
 [xml]$xaml_RequestPendingWindow = Get-Content -Path "$($PSScriptRoot)\resources\RequestPendingWindow.xaml"
 [xml]$xaml_FindUsersWindow = Get-Content -Path "$($PSScriptRoot)\resources\FindUsersWindow.xaml"
 [xml]$xaml_CardOperationsWindow = Get-Content -Path "$($PSScriptRoot)\resources\CardOperationsWindow.xaml"

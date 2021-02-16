@@ -17,7 +17,6 @@ $ErrorActionPreference = "Stop"
 # ---------------------- Script scope variables ----------------------
 #
 $script:ykman = "C:\Program Files\Yubico\YubiKey Manager\ykman.exe"
-$script:certreq = "C:\Windows\system32\certreq.exe"
 $script:workDir = "$($env:APPDATA)\ps-enrollment-station"
 $script:hideSecrets = $true
 $script:ShowDebugOutput = $true
@@ -440,11 +439,11 @@ function Request-Certificate()
         }
     }
 
-    if($r.ReturnCode -eq 0) { Write-Log -LogString ":: ReturnCode 0 foreign certificate" -Severity Debug }
-    if($r.ReturnCode -eq 2) { Write-Log -Logstring ":: ReturnCode 2 request denied " -Severity Debug }
-    if($r.ReturnCode -eq 3) { Write-Log -LogString ":: ReturnCode 3 certificate issued" -Severity Debug }
-    if($r.ReturnCode -eq 5) { Write-Log -LogString ":: ReturnCode 5 request pending" -Severity Debug }
-    if($r.ReturnCode -eq 6) { Write-Log -LogString ":: ReturnCode 6 certificate revoked" -Severity Debug }
+    if($r.ReturnCode -eq 0) { Write-Log -LogString ":: ReturnCode 0 foreign certificate" -Severity Notice }
+    if($r.ReturnCode -eq 2) { Write-Log -Logstring ":: ReturnCode 2 request denied " -Severity Notice }
+    if($r.ReturnCode -eq 3) { Write-Log -LogString ":: ReturnCode 3 certificate issued" -Severity Notice }
+    if($r.ReturnCode -eq 5) { Write-Log -LogString ":: ReturnCode 5 request pending" -Severity Notice }
+    if($r.ReturnCode -eq 6) { Write-Log -LogString ":: ReturnCode 6 certificate revoked" -Severity Notice }
 
     return ,$r
 }
@@ -774,6 +773,9 @@ function Show-EnrollWindow(){
         $Win.Window.Close()
     })
 
+
+
+
     $Win.btnEnroll.Add_Click({
         # Get options from UI
         if($Win.cmbiNewCard.IsSelected -or $Win.chkReset.IsChecked) {
@@ -824,7 +826,6 @@ function Show-EnrollWindow(){
         }
 
         $SetCCIDOnlyMode = $Win.chkSetCCIDOnlyMode.IsChecked
-
 
         $opts = "Reset piv: $ResetPiv`nSlot: $Slot`nKey Algorithm: $KeyAlgo`nPIN Policy: $PinPolicy`nTouchPolicy: $TouchPolicy`nCertificate Template: $CertTemplate`nSigning Certificate: $SigningCert`nSubject: $Subject`nSet CCID only mode: $SetCCIDOnlyMode"
         Write-Log -Logstring "Attempting enroll will the following options:`n$opts" -Severity Debug
@@ -877,7 +878,6 @@ function Show-EnrollWindow(){
 
             if($request.ReturnCode -eq 5) {
                 [System.Windows.MessageBox]::Show("Certificate request is pending CA Manager approval.`nRequest id: $($request.Id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($request.Id)"
                 return
             } elseif($request.ReturnCode -eq 3) {
                 Import-Certificate -Card $Card -Pin $Pin -Slot $Slot -CertBase64 $request.Base64
@@ -995,14 +995,16 @@ function Show-MainWindow(){
 
     $MainWindow.btnShowEnrollWindow.Add_Click({
         if(Check-ValidCardIsSelected) {
-           $result = Show-EnrollWindow -Card $MainWindow.lstReaders.SelectedItem
+            Show-EnrollWindow -Card $MainWindow.lstReaders.SelectedItem
         }
     })
 
+    $MainWindow.btnShowRequestToFileWindow.Add_Click({
+        Show-RequestToFileWindow -Card $MainWindow.lstReaders.SelectedItem
+    })
+
     $MainWindow.btnShowRequestPendingWindow.Add_Click({
-        if(Check-ValidCardIsSelected) {
-            Show-RequestPendingWindow -Card $MainWindow.lstReaders.SelectedItem
-        }
+        Show-RequestPendingWindow -Card $MainWindow.lstReaders.SelectedItem
     })
 
     $MainWindow.btnChangePin.Add_Click({
@@ -1034,7 +1036,7 @@ function Show-MainWindow(){
 }
 function Show-RequestPendingWindow(){
     param(
-        [Parameter(Mandatory=$true)]  [PSCustomObject]$Card
+        [Parameter(Mandatory=$false)]  [PSCustomObject]$Card
     )
 
     #
@@ -1046,6 +1048,13 @@ function Show-RequestPendingWindow(){
         $Win.$($_.Name) = $Win.Window.FindName($_.Name)
     }
 
+
+    if((($Card) -and (-not $Card.CardOk)) -or (-not $Card)) {
+        $Win.chkSaveToFile.IsChecked = $true
+        $Win.chkSaveToFile.IsEnabled = $false
+    }
+
+
     $Win.btnCancel.add_Click({
         $Win.Window.Close()
     })
@@ -1055,18 +1064,35 @@ function Show-RequestPendingWindow(){
             $Id = $Win.txtId.Text
             $Slot = $Win.cmbSlot.SelectedItem.Tag
             $Pin = $Win.pwdPin.Password
+            $SaveToFile = $Win.chkSaveToFile.IsChecked
+
+            if($SaveToFile) {
+                $SaveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
+                $SaveFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
+                $SaveFileDialog.Filter = "Certificate files (*.crt)|*.cer|All files (*.*)|*.*"
+                $SaveFileDialog.ShowDialog()
+
+                if($SaveFileDialog.FileName -eq "") {
+                    return
+                }
+            }
+            $Win.Window.Close()
 
             $request = Request-Certificate -Id $Id
-
             if($request.ReturnCode -eq 5) {
                 [System.Windows.MessageBox]::Show("Certificate request is still pending CA Manager approval.`nRequest id: $($Id)", "Information", 'Ok', 'Information') | Out-Null
-                Set-ResultText -Success "Enrollment pending approval, id: $($Id)"
                 return
-            } elseif($request.ReturnCode -eq 3) {
+            } elseif(($request.ReturnCode -eq 3) -and (-not $SaveToFile)) {
+                # Save request to card slot
                 Import-Certificate -Card $Card -Pin $Pin -Slot $Slot -CertBase64 $request.Base64
                 Reset-Chuid -Card $Card -Pin $Pin
                 [System.Windows.MessageBox]::Show("Certificate enrolled successfully!", "Information", 'Ok', 'Information') | Out-Null
                 [System.Windows.MessageBox]::Show("The Card Holder Unique Identifier (CHUID) has been reset.`n`nYou should remove and reinsert the key before enrolling other certificates or doing any signing operations.", "Information", 'Ok', 'Information') | Out-Null
+            } elseif (($request.ReturnCode -eq 3) -and ($SaveToFile)){
+                # Save request to file
+                Set-Content $SaveFileDialog.FileName -Value $request.Base64
+                Write-Log -LogString "Request $Id retrieved and saved to $($SaveFileDialog.FileName)" -Severity Notice
+                [System.Windows.MessageBox]::Show("Certificate saved successfully!", "Information", 'Ok', 'Information') | Out-Null
             } else {
                 throw "Unexpected return code [$($request.ReturnCode)] while requesting certificate."
             }
@@ -1074,6 +1100,106 @@ function Show-RequestPendingWindow(){
             [System.Windows.MessageBox]::Show("Request failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
         }
     })
+    $Win.Window.ShowDialog()
+}
+function Show-RequestToFileWindow(){
+    #
+    # Setup Window
+    #
+    $Win = @{}
+    $Win.Window = [Windows.Markup.XamlReader]::Load((New-Object -TypeName System.Xml.XmlNodeReader -ArgumentList $xaml_RequestToFileWindow))
+    $xaml_RequestToFileWindow.SelectNodes("//*[@*[contains(translate(name(.),'n','N'),'Name')]]") | ForEach-Object -Process {
+        $Win.$($_.Name) = $Win.Window.FindName($_.Name)
+    }
+
+    $Win.cmbTemplates.ItemsSource = Get-CertificateTemplates
+    $Win.cmbSigningCerts.ItemsSource = Get-SigningCertificates
+    $Win.txtSubject.Text = "/CN=$($env:Username)/"
+
+    $Win.btnShowFindUsersWindow.Add_Click({
+        $selectedUser = (Show-FindUsersWindow)
+        if(-not [string]::IsNullOrEmpty($selectedUser)) {
+            $Win.txtSubject.Text = $selectedUser
+        }
+    })
+
+    $Win.btnCancel.add_Click({
+        $Win.Window.Close()
+    })
+
+    $Win.btnSelectCsrFile.add_Click({
+        $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+        $OpenFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
+        $OpenFileDialog.Filter = "Certificate files (*.csr,*.req)|*.csr;*.req|All files (*.*)|*.*"
+        $OpenFileDialog.ShowDialog()
+        if($OpenFileDialog.FileName -ne "") {
+            $Win.txtCsrFilePath.Text = $OpenFileDialog.FileName
+        }
+    })
+
+    $Win.btnEnroll.Add_Click({
+        $Subject = $Win.txtSubject.Text
+        if($win.cmbTemplates.SelectedIndex -lt 0) {
+            [System.Windows.MessageBox]::Show("No Template selected!.", "Information", 'Ok', 'Information') | Out-Null
+            return
+        } else {
+            $CertTemplate = $Win.cmbTemplates.SelectedItem
+        }
+
+        if((($win.cmbTemplates.SelectedItem).RequiredSignatures -gt 0) -and $win.cmbSigningCerts.SelectedIndex -lt 0) {
+            [System.Windows.MessageBox]::Show("Selected Template requires signing but not signing cert selected!.", "Information", 'Ok', 'Information') | Out-Null
+            return
+        } else {
+            $SigningCert = $Win.cmbSigningCerts.SelectedItem
+        }
+
+        if(-not $Win.txtCsrFilePath.Text) {
+            [System.Windows.MessageBox]::Show("No CSR File selected!", "Information", 'Ok', 'Information') | Out-Null
+            return
+        }
+        $CsrFile = $Win.txtCsrFilePath.Text
+
+
+        $SaveFileDialog = New-Object System.Windows.Forms.SaveFileDialog
+        $SaveFileDialog.InitialDirectory = [Environment]::GetFolderPath("MyDocuments")
+        $SaveFileDialog.Filter = "Certificate files (*.crt)|*.cer|All files (*.*)|*.*"
+        $SaveFileDialog.ShowDialog()
+        if($SaveFileDialog.FileName -eq "") {
+            return
+        }
+        $Win.Window.Close()
+
+        try{
+            if(($CertTemplate).RequiredSignatures -gt 0) {
+                $parms = @{
+                    SigningCertificateThumbprint = ($SigningCert).Thumbprint
+                    Subject = $Subject
+                    CertTemplate = $CertTemplate
+                    CsrInputFile = $CsrFile
+                    CsrOutputFile = "$($script:workDir)\tmp.signed.csr"
+                }
+                Sign-CertificateRequest  @parms
+                $request = Request-Certificate -CertTemplate $CertTemplate -CsrFile "$($script:workDir)\tmp.signed.csr"
+            }
+            else {
+                $request = Request-Certificate -CertTemplate $CertTemplate -CsrFile $CsrFile
+            }
+
+            if($request.ReturnCode -eq 5) {
+                [System.Windows.MessageBox]::Show("Certificate request is pending CA Manager approval.`nRequest id: $($request.Id)", "Information", 'Ok', 'Information') | Out-Null
+                return
+            } elseif($request.ReturnCode -eq 3) {
+                Set-Content $SaveFileDialog.FileName -Value $request.Base64
+                Write-Log -LogString "Certificate retrieved and saved to $($SaveFileDialog.FileName)" -Severity Notice
+                [System.Windows.MessageBox]::Show("Certificate saved successfully!", "Information", 'Ok', 'Information') | Out-Null
+            } else {
+                throw "Unexpected return code [$($request.ReturnCode)] while requesting certificate."
+            }
+        } catch {
+            [System.Windows.MessageBox]::Show("Request failed!`n$(Hide-Secrets -String $_)", "Error", 'Ok', 'Error') | Out-Null
+        }
+    })
+
     $Win.Window.ShowDialog()
 }
 function Validate-Pin()
@@ -1246,12 +1372,73 @@ Function Write-Log
 #endregion
 
 #region XAML
-[xml]$xaml_EnrollWindow = @"
+[xml]$xaml_FindUsersWindow = @"
 
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    x:Name="EnrollWindow"
+    x:Name="FindUsersWindow"
+    Title="" Height="500" Width="725">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="VisCon"/>
+
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style TargetType="{x:Type TextBox}">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style TargetType="{x:Type Button}">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style TargetType="{x:Type ListBox}">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="10,0,10,0">
+            <TextBlock Text="User: " VerticalAlignment="Center"/>
+            <TextBox Name="SearchTextBox" Width="100"/>
+            <Button Content="Search" Height="25" Name="SearchButton" Margin="5,0,0,0"/>
+        </StackPanel>
+
+        <!--<ScrollViewer Grid.Row="4">-->
+            <DataGrid ScrollViewer.CanContentScroll="True"  ScrollViewer.HorizontalScrollBarVisibility="Auto" Grid.Row="4" IsReadOnly="True" ColumnWidth="*" HorizontalAlignment="Stretch" Name="DataGrid" AutoGenerateColumns="True" SelectionMode="Single" Margin="10,10,10,0"/>
+        <!--</ScrollViewer>-->
+        <TextBlock Name="CountTextBlock" Grid.Column="0" Grid.ColumnSpan="4" Grid.Row="5" Margin="0,0,10,2" HorizontalAlignment="Right"/>
+        <StackPanel Grid.Column="0" HorizontalAlignment="Center" Grid.Row="6" Orientation="Horizontal">
+            <ToggleButton Content="Ok" Width="60" Height="25" Name="OkButton" Margin="10"/>
+            <Button Content="Cancel" Width="60" Height="25" Name="CancelButton" Margin="10"/>
+        </StackPanel>
+
+    </Grid>
+</Window>
+
+"@
+[xml]$xaml_RequestToFileWindow = @"
+
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Name="RequestToFileWindow"
     SizeToContent="WidthAndHeight"
     Title="" MinHeight="325" MinWidth="425">
 
@@ -1263,6 +1450,7 @@ Function Write-Log
         <Geometry x:Key="searchIcon">M15.5,12C18,12 20,14 20,16.5C20,17.38 19.75,18.21 19.31,18.9L22.39,22L21,23.39L17.88,20.32C17.19,20.75 16.37,21 15.5,21C13,21 11,19 11,16.5C11,14 13,12 15.5,12M15.5,14A2.5,2.5 0 0,0 13,16.5A2.5,2.5 0 0,0 15.5,19A2.5,2.5 0 0,0 18,16.5A2.5,2.5 0 0,0 15.5,14M10,4A4,4 0 0,1 14,8C14,8.91 13.69,9.75 13.18,10.43C12.32,10.75 11.55,11.26 10.91,11.9L10,12A4,4 0 0,1 6,8A4,4 0 0,1 10,4M2,20V18C2,15.88 5.31,14.14 9.5,14C9.18,14.78 9,15.62 9,16.5C9,17.79 9.38,19 10,20H2Z</Geometry>
         <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
         <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
+        <Geometry x:Key="selectFileIcon">M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H13C12.59,21.75 12.2,21.44 11.86,21.1C9.22,18.67 9.05,14.56 11.5,11.92C13.69,9.5 17.33,9.13 20,11V8L14,2M13,9V3.5L18.5,9H13M20.31,18.9C21.64,16.79 21,14 18.91,12.68C16.8,11.35 14,12 12.69,14.08C11.35,16.19 12,18.97 14.09,20.3C15.55,21.23 17.41,21.23 18.88,20.32L22,23.39L23.39,22L20.31,18.9M16.5,19A2.5,2.5 0 0,1 14,16.5A2.5,2.5 0 0,1 16.5,14A2.5,2.5 0 0,1 19,16.5A2.5,2.5 0 0,1 16.5,19Z</Geometry>
 
         <!-- ModernUI Icons Icons -->
         <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
@@ -1325,14 +1513,9 @@ Function Write-Log
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="8"/>
         </Grid.RowDefinitions>
-        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Enroll certificate" FontSize="16"/>
+        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Request certificate to file" FontSize="16"/>
         <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
 
-        <TextBlock Grid.Column="0" Grid.Row="2" Text="Enrollment template"/>
-        <ComboBox Grid.Column="2" Grid.Row="2" SelectedIndex="0" Name="cmbRequestType">
-            <ComboBoxItem Content="Wipe and enroll new card" Name="cmbiNewCard" Tag="newcard"/>
-            <ComboBoxItem Content="Advanced enrollment" Name="cmbiAdvRequest" Tag="advrequest"/>
-        </ComboBox>
         <TextBlock Grid.Column="0" Grid.Row="3" Text="Certificate Template"/>
         <ComboBox Grid.Column="2" Grid.Row="3" Name="cmbTemplates" DisplayMemberPath="DisplayName"/>
 
@@ -1350,7 +1533,6 @@ Function Write-Log
         <ComboBox Grid.Column="2" Grid.Row="5" Name="cmbSigningCerts" DisplayMemberPath="Description" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
 
         <TextBlock Grid.Column="0" Grid.Row="6" Text="Subject" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
-
         <Grid Grid.Column="2" Grid.Row="6" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
@@ -1362,16 +1544,119 @@ Function Write-Log
             </Button>
         </Grid>
 
-        <!-- Only Show if Advanced request-->
-        <TextBlock Grid.Column="0" Grid.Row="7" Text="Reset PIV" Name="txtResetPiv" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
-        <CheckBox Grid.Column="2" Grid.Row="7" Name="chkReset" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <TextBlock Grid.Column="0" Grid.Row="7" Text="CSR File" Name="txtSelectCsrFile"/>
+        <Grid Grid.Column="2" Grid.Row="7">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" Name="txtCsrFilePath" IsReadOnly="True" HorizontalAlignment="Stretch"/>
+            <Button Grid.Column="1" Height="25" Width="25" HorizontalAlignment="Right" VerticalAlignment="Top" Name="btnSelectCsrFile" ToolTip="Select CSR file" Background="Transparent" Margin="2,2,0,2">
+                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource selectFileIcon}"/>
+            </Button>
+        </Grid>
 
-        <TextBlock Grid.Column="0" Grid.Row="8" Text="Set CCID only mode" Name="txtSetMode" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
-        <CheckBox Grid.Column="2" Grid.Row="8" Name="chkSetCCIDOnlyMode" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <StackPanel Orientation="Horizontal" Grid.Column="2" HorizontalAlignment="Right" Grid.Row="16" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Enroll" Width="90"/>
+            <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
+        </StackPanel>
+    </Grid>
+</Window>
 
+"@
+[xml]$xaml_RequestPendingWindow = @"
 
-        <TextBlock Grid.Column="0" Grid.Row="9" Text="Target Slot" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
-        <ComboBox Grid.Column="2" Grid.Row="9" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    x:Name="RequestPendingWindow"
+    Title="" Height="225" Width="425">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="VisCon"/>
+
+        <SolidColorBrush x:Key="iconColor">#336699</SolidColorBrush>
+        <!-- Material Design Icons -->
+        <Geometry x:Key="searchIcon">M15.5,12C18,12 20,14 20,16.5C20,17.38 19.75,18.21 19.31,18.9L22.39,22L21,23.39L17.88,20.32C17.19,20.75 16.37,21 15.5,21C13,21 11,19 11,16.5C11,14 13,12 15.5,12M15.5,14A2.5,2.5 0 0,0 13,16.5A2.5,2.5 0 0,0 15.5,19A2.5,2.5 0 0,0 18,16.5A2.5,2.5 0 0,0 15.5,14M10,4A4,4 0 0,1 14,8C14,8.91 13.69,9.75 13.18,10.43C12.32,10.75 11.55,11.26 10.91,11.9L10,12A4,4 0 0,1 6,8A4,4 0 0,1 10,4M2,20V18C2,15.88 5.31,14.14 9.5,14C9.18,14.78 9,15.62 9,16.5C9,17.79 9.38,19 10,20H2Z</Geometry>
+        <Geometry x:Key="uploadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M16 17H14V13H11L15 9L19 13H16Z</Geometry>
+        <Geometry x:Key="downloadIcon">M20 18H4V8H20M20 6H12L10 4H4A2 2 0 0 0 2 6V18A2 2 0 0 0 4 20H20A2 2 0 0 0 22 18V8A2 2 0 0 0 20 6M14 9H16V13H19L15 17L11 13H14Z</Geometry>
+
+        <!-- ModernUI Icons Icons -->
+        <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
+        <Geometry x:Key="backIcon">F1 M 57,42L 57,34L 32.25,34L 42.25,24L 31.75,24L 17.75,38L 31.75,52L 42.25,52L 32.25,42L 57,42 Z </Geometry>
+        <Geometry x:Key="reloadIcon">F1 M 38,20.5833C 42.9908,20.5833 47.4912,22.6825 50.6667,26.046L 50.6667,17.4167L 55.4166,22.1667L 55.4167,34.8333L 42.75,34.8333L 38,30.0833L 46.8512,30.0833C 44.6768,27.6539 41.517,26.125 38,26.125C 31.9785,26.125 27.0037,30.6068 26.2296,36.4167L 20.6543,36.4167C 21.4543,27.5397 28.9148,20.5833 38,20.5833 Z M 38,49.875C 44.0215,49.875 48.9963,45.3932 49.7703,39.5833L 55.3457,39.5833C 54.5457,48.4603 47.0852,55.4167 38,55.4167C 33.0092,55.4167 28.5088,53.3175 25.3333,49.954L 25.3333,58.5833L 20.5833,53.8333L 20.5833,41.1667L 33.25,41.1667L 38,45.9167L 29.1487,45.9167C 31.3231,48.3461 34.483,49.875 38,49.875 Z </Geometry>
+        <Geometry x:Key="cardIcon">F1 M 23.75,22.1667L 52.25,22.1667C 55.7478,22.1667 58.5833,25.0022 58.5833,28.5L 58.5833,47.5C 58.5833,50.9978 55.7478,53.8333 52.25,53.8333L 23.75,53.8333C 20.2522,53.8333 17.4167,50.9978 17.4167,47.5L 17.4167,28.5C 17.4167,25.0022 20.2522,22.1667 23.75,22.1667 Z M 57,42.75L 19,42.75L 19,45.9167C 19,47.0702 19.3084,48.1518 19.8473,49.0833L 56.1527,49.0833C 56.6916,48.1518 57,47.0702 57,45.9167L 57,42.75 Z M 20.5833,25.3333L 20.5833,31.6667L 26.9167,31.6667L 26.9167,25.3333L 20.5833,25.3333 Z </Geometry>
+        <Geometry x:Key="infoIcon">F1 M 31.6666,30.0834L 42.7499,30.0834L 42.7499,33.2501L 42.7499,52.2501L 45.9165,52.2501L 45.9165,57.0001L 31.6666,57.0001L 31.6666,52.2501L 34.8332,52.2501L 34.8332,34.8335L 31.6666,34.8335L 31.6666,30.0834 Z M 38.7917,19C 40.9778,19 42.75,20.7722 42.75,22.9583C 42.75,25.1445 40.9778,26.9167 38.7917,26.9167C 36.6055,26.9167 34.8333,25.1445 34.8333,22.9583C 34.8333,20.7722 36.6055,19 38.7917,19 Z </Geometry>
+
+        <Style TargetType="{x:Type TextBlock}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type PasswordBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+            <Setter Property="Width" Value="90"/>
+        </Style>
+        <Style TargetType="{x:Type TextBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type Button}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type ComboBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+        <Style TargetType="{x:Type CheckBox}">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+        </Style>
+
+    </Window.Resources>
+
+    <Grid Name="RetrieveGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowRetrieveGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120"/>
+            <ColumnDefinition Width="10"/>
+            <ColumnDefinition Width="240"/>
+            <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="8"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="20"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Retrieve approved certificate" FontSize="16"/>
+        <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="4" Text="Request Id"/>
+        <TextBox Grid.Column="2" Grid.Row="4" Name="txtId" HorizontalAlignment="Stretch"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="5" Text="Save to file"/>
+        <CheckBox Grid.Column="2" Grid.Row="5" Name="chkSaveToFile" VerticalAlignment="Center"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="6" Text="Target Slot" Name="txtSlot">
+            <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ElementName=chkSaveToFile, Path=IsChecked, FallbackValue=False}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+        </TextBlock>
+        <ComboBox Grid.Column="2" Grid.Row="6" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0" Visibility="{Binding ElementName=txtSlot, Path=Visibility}">
             <ComboBoxItem Content="Slot 9a: PIV Authentication" Tag="9a"/>
             <ComboBoxItem Content="Slot 9c: Digital Signature" Tag="9c"/>
             <ComboBoxItem Content="Slot 9d: Key Management" Tag="9d"/>
@@ -1379,54 +1664,18 @@ Function Write-Log
             <ComboBoxItem Content="Slot f9: Attestation" Tag="f9"/>
         </ComboBox>
 
-        <TextBlock Grid.Column="0" Grid.Row="10" Text="Key Algorithm" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
-        <ComboBox Grid.Column="2" Grid.Row="10"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyAlgo" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
-            <ComboBoxItem Content="TDES" Tag="TDES"/>
-            <ComboBoxItem Content="RSA1024" Tag="RSA1024"/>
-            <ComboBoxItem Content="RSA2048" Tag="RSA2048"/>
-            <ComboBoxItem Content="ECCP256" Tag="ECCP256"/>
-            <ComboBoxItem Content="ECCP384" Tag="ECCP384"/>
-        </ComboBox>
+        <TextBlock Grid.Column="0" Grid.Row="7" Text="Current PIN" Visibility="{Binding ElementName=txtSlot, Path=Visibility}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="7" Name="pwdPin" HorizontalAlignment="Left" Visibility="{Binding ElementName=txtSlot, Path=Visibility}"/>
 
-        <TextBlock Grid.Column="0" Grid.Row="11" Text="Key Touch Policy"/>
-        <ComboBox Grid.Column="2" Grid.Row="11"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
-            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
-            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
-            <ComboBoxItem Content="CACHED" Tag="CACHED"/>
-        </ComboBox>
-
-        <TextBlock Grid.Column="0" Grid.Row="12" Text="Key PIN Policy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
-        <ComboBox Grid.Column="2" Grid.Row="12"  HorizontalAlignment="Stretch" SelectedIndex="0" Name="cmbKeyPinPolicy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
-            <ComboBoxItem Content="DEFAULT" Tag="DEFAULT"/>
-            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
-            <ComboBoxItem Content="ONCE" Tag="ONCE"/>
-            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
-        </ComboBox>
-
-        <TextBlock Grid.Column="0" Grid.Row="13" Text="Current PIN" Name="txtCurrentPin">
-            <TextBlock.Style>
-                <Style TargetType="TextBlock">
-                    <Style.Triggers>
-                        <DataTrigger Binding="{Binding ElementName=chkReset, Path=IsChecked}" Value="True">
-                            <Setter Property="Visibility" Value="Collapsed"/>
-                        </DataTrigger>
-                    </Style.Triggers>
-                </Style>
-            </TextBlock.Style>
-        </TextBlock>
-        <PasswordBox Grid.Column="2" Grid.Row="13" Name="pwdCurrentPin" HorizontalAlignment="Left" Visibility="{Binding ElementName=txtCurrentPin, Path=Visibility}"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="14" Text="New PIN" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
-        <PasswordBox Grid.Column="2" Grid.Row="14" Name="pwdNewPin1" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
-
-        <TextBlock Grid.Column="0" Grid.Row="15" Text="New PIN (Again)" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
-        <PasswordBox Grid.Column="2" Grid.Row="15" Name="pwdNewPin2" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
-
-        <StackPanel Orientation="Horizontal" Grid.Column="2" HorizontalAlignment="Right" Grid.Row="16" Margin="0,10,0,0">
-            <Button Name="btnEnroll" Content="Enroll" Width="90"/>
+        <StackPanel Grid.Column="2" Grid.Row="8" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Retrieve" Width="90"/>
             <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
         </StackPanel>
+
+
     </Grid>
+
+
 </Window>
 
 "@
@@ -1627,6 +1876,9 @@ Function Write-Log
         <Geometry x:Key="retrieveIcon">M20 4H4C2.9 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 14.91 14.41 12 18 12C19.5 12 20.9 12.53 22 13.4V6C22 4.89 21.11 4 20 4M20 11H4V8H20V11M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
         <Geometry x:Key="retrieveIcon2">M20 4H4C2.89 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 18.33 11.5 18.17 11.53 18H4V12H20V12.32C20.74 12.56 21.41 12.93 22 13.4V6C22 4.89 21.1 4 20 4M20 8H4V6H20V8M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
 
+        <Geometry x:Key="requestToFileIcon">M11 16A1 1 0 1 1 10 15A1 1 0 0 1 11 16M20 8V20A2 2 0 0 1 18 22H6A2 2 0 0 1 4 20V4A2 2 0 0 1 6 2H14M17 15H12.83A3 3 0 1 0 12.83 17H14V19H16V17H17M18.5 9L13 3.5V9Z</Geometry>
+        <Geometry x:Key="requestToFileIcon2">M14 2H6A2 2 0 0 0 4 4V20A2 2 0 0 0 6 22H18A2 2 0 0 0 20 20V8L14 2M18 20H6V4H13V9H18M12.83 15A3 3 0 1 0 12.83 17H14V19H16V17H17V15M10 17A1 1 0 1 1 11 16A1 1 0 0 1 10 17Z</Geometry>
+
 
         <!-- ModernUI Icons Icons -->
         <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
@@ -1697,8 +1949,6 @@ Function Write-Log
                 <Path Margin="2" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource consoleIcon}"/>
             </ToggleButton>
         </StackPanel>
-
-
 
         <GroupBox Grid.Column="0" Grid.Row="1" Margin="10">
             <GroupBox.Header>
@@ -2000,7 +2250,13 @@ Function Write-Log
                     <Button Name="btnShowEnrollWindow" Margin="4">
                         <StackPanel Orientation="Horizontal" Width="150">
                             <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource requestIcon}"/>
-                            <TextBlock Text="Enroll certificate"/>
+                            <TextBlock Text="Request to card"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Name="btnShowRequestToFileWindow" Margin="4">
+                        <StackPanel Orientation="Horizontal" Width="150">
+                            <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource requestToFileIcon}"/>
+                            <TextBlock Text="Request to file"/>
                         </StackPanel>
                     </Button>
                     <Button Name="btnShowRequestPendingWindow" Margin="4">
@@ -2037,13 +2293,14 @@ Function Write-Log
 </Window>
 
 "@
-[xml]$xaml_RequestPendingWindow = @"
+[xml]$xaml_EnrollWindow = @"
 
 <Window
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    x:Name="RequestPendingWindow"
-    Title="" Height="225" Width="425">
+    x:Name="EnrollWindow"
+    SizeToContent="WidthAndHeight"
+    Title="" MinHeight="325" MinWidth="425">
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="VisCon"/>
@@ -2086,10 +2343,9 @@ Function Write-Log
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="Margin" Value="0,2,0,2"/>
         </Style>
-
     </Window.Resources>
 
-    <Grid Name="RetrieveGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowRetrieveGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
+    <Grid Name="EnrollGrid" Grid.Row="1" Width="380" Visibility="{Binding ElementName=ShowEnrollGridButton,Path=IsChecked, Converter={StaticResource VisCon}}" Margin="10,10,10,0">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="120"/>
             <ColumnDefinition Width="10"/>
@@ -2106,17 +2362,63 @@ Function Write-Log
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
-            <RowDefinition Height="20"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="8"/>
         </Grid.RowDefinitions>
-
-        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Retrieve approved certificate" FontSize="16"/>
+        <TextBlock Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="0" Text="Request certificate" FontSize="16"/>
         <Separator Grid.Column="0" Grid.ColumnSpan="3" Grid.Row="1" VerticalAlignment="Top"/>
 
-        <TextBlock Grid.Column="0" Grid.Row="4" Text="Request Id"/>
-        <TextBox Grid.Column="2" Grid.Row="4" Name="txtId" HorizontalAlignment="Stretch"/>
+        <TextBlock Grid.Column="0" Grid.Row="2" Text="Enrollment template"/>
+        <ComboBox Grid.Column="2" Grid.Row="2" SelectedIndex="0" Name="cmbRequestType">
+            <ComboBoxItem Content="Wipe and request" Name="cmbiNewCard" Tag="newcard"/>
+            <ComboBoxItem Content="Advanced request" Name="cmbiAdvRequest" Tag="advrequest"/>
+        </ComboBox>
+        <TextBlock Grid.Column="0" Grid.Row="3" Text="Certificate Template"/>
+        <ComboBox Grid.Column="2" Grid.Row="3" Name="cmbTemplates" DisplayMemberPath="DisplayName"/>
 
-        <TextBlock Grid.Column="0" Grid.Row="5" Text="Target Slot"/>
-        <ComboBox Grid.Column="2" Grid.Row="5" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0">
+        <TextBlock Grid.Column="0" Grid.Row="5" Text="Signing certificate" FontSize="12" Name="EnrollSigningCertTextBlock">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding ElementName=cmbTemplates, Path=SelectedItem.RequiredSignatures, FallbackValue=0}" Value="0">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <ComboBox Grid.Column="2" Grid.Row="5" Name="cmbSigningCerts" DisplayMemberPath="Description" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="6" Text="Subject" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}"/>
+        <Grid Grid.Column="2" Grid.Row="6" Visibility="{Binding ElementName=EnrollSigningCertTextBlock, Path=Visibility}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBox Grid.Column="0" Name="txtSubject" IsReadOnly="True" HorizontalAlignment="Stretch"/>
+            <Button Grid.Column="1" Height="25" Width="25" HorizontalAlignment="Right" VerticalAlignment="Top" Name="btnShowFindUsersWindow" ToolTip="Find user" Background="Transparent" Margin="2,2,0,2">
+                <Path Margin="1" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource searchIcon}"/>
+            </Button>
+        </Grid>
+
+        <!-- Only Show if Advanced request -->
+        <TextBlock Grid.Column="0" Grid.Row="7" Text="Reset PIV" Name="txtResetPiv" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <CheckBox Grid.Column="2" Grid.Row="7" Name="chkReset" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+
+        <!-- Only Show if Advanced request -->
+        <TextBlock Grid.Column="0" Grid.Row="8" Text="Set CCID only mode" Name="txtSetMode" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <CheckBox Grid.Column="2" Grid.Row="8" Name="chkSetCCIDOnlyMode" VerticalAlignment="Center" IsChecked="{Binding ElementName=cmbiNewCard, Path=IsSelected, Mode=OneWay}" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+
+        <!-- Only Show if Advanced request -->
+        <TextBlock Grid.Column="0" Grid.Row="9" Text="Target Slot" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="9" HorizontalAlignment="Stretch" Name="cmbSlot" SelectedIndex="0" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
             <ComboBoxItem Content="Slot 9a: PIV Authentication" Tag="9a"/>
             <ComboBoxItem Content="Slot 9c: Digital Signature" Tag="9c"/>
             <ComboBoxItem Content="Slot 9d: Key Management" Tag="9d"/>
@@ -2124,78 +2426,55 @@ Function Write-Log
             <ComboBoxItem Content="Slot f9: Attestation" Tag="f9"/>
         </ComboBox>
 
-        <TextBlock Grid.Column="0" Grid.Row="6" Text="Current PIN"/>
-        <PasswordBox Grid.Column="2" Grid.Row="6" Name="pwdPin" HorizontalAlignment="Left"/>
+        <!-- Only Show if Advanced request -->
+        <TextBlock Grid.Column="0" Grid.Row="10" Text="Key Algorithm" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="10"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyAlgo" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="TDES" Tag="TDES"/>
+            <ComboBoxItem Content="RSA1024" Tag="RSA1024"/>
+            <ComboBoxItem Content="RSA2048" Tag="RSA2048"/>
+            <ComboBoxItem Content="ECCP256" Tag="ECCP256"/>
+            <ComboBoxItem Content="ECCP384" Tag="ECCP384"/>
+        </ComboBox>
 
-        <StackPanel Grid.Column="2" Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
-            <Button Name="btnEnroll" Content="Retrieve" Width="90"/>
+        <TextBlock Grid.Column="0" Grid.Row="11" Text="Key Touch Policy" Name="txtTouchPolicy"/>
+        <ComboBox Grid.Column="2" Grid.Row="11"  HorizontalAlignment="Stretch" SelectedIndex="2" Name="cmbKeyTouchPolicy">
+            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
+            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
+            <ComboBoxItem Content="CACHED" Tag="CACHED"/>
+        </ComboBox>
+
+        <!-- Only Show if Advanced request -->
+        <TextBlock Grid.Column="0" Grid.Row="12" Text="Key PIN Policy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}"/>
+        <ComboBox Grid.Column="2" Grid.Row="12"  HorizontalAlignment="Stretch" SelectedIndex="0" Name="cmbKeyPinPolicy" Visibility="{Binding ElementName=cmbiAdvRequest,Path=IsSelected, Converter={StaticResource VisCon}}">
+            <ComboBoxItem Content="DEFAULT" Tag="DEFAULT"/>
+            <ComboBoxItem Content="NEVER" Tag="NEVER"/>
+            <ComboBoxItem Content="ONCE" Tag="ONCE"/>
+            <ComboBoxItem Content="ALWAYS" Tag="ALWAYS"/>
+        </ComboBox>
+
+        <TextBlock Grid.Column="0" Grid.Row="13" Text="Current PIN" Name="txtCurrentPin">
+            <TextBlock.Style>
+                <Style TargetType="TextBlock">
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding ElementName=chkReset, Path=IsChecked}" Value="True">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TextBlock.Style>
+        </TextBlock>
+        <PasswordBox Grid.Column="2" Grid.Row="13" Name="pwdCurrentPin" HorizontalAlignment="Left" Visibility="{Binding ElementName=txtCurrentPin, Path=Visibility}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="14" Text="New PIN" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="14" Name="pwdNewPin1" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+
+        <TextBlock Grid.Column="0" Grid.Row="15" Text="New PIN (Again)" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+        <PasswordBox Grid.Column="2" Grid.Row="15" Name="pwdNewPin2" HorizontalAlignment="Left" Visibility="{Binding ElementName=chkReset,Path=IsChecked, Converter={StaticResource VisCon}}"/>
+
+        <StackPanel Orientation="Horizontal" Grid.Column="2" HorizontalAlignment="Right" Grid.Row="16" Margin="0,10,0,0">
+            <Button Name="btnEnroll" Content="Enroll" Width="90"/>
             <Button Name="btnCancel" Content="Cancel" Width="90" Margin="6,2,0,2"/>
         </StackPanel>
-
-
-    </Grid>
-
-
-</Window>
-
-"@
-[xml]$xaml_FindUsersWindow = @"
-
-<Window
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    x:Name="FindUsersWindow"
-    Title="" Height="500" Width="725">
-
-    <Window.Resources>
-        <BooleanToVisibilityConverter x:Key="VisCon"/>
-
-        <Style TargetType="{x:Type TextBlock}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type TextBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type Button}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type ListBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type ComboBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-        <Style TargetType="{x:Type CheckBox}">
-            <Setter Property="FontSize" Value="12"/>
-        </Style>
-
-    </Window.Resources>
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="10,0,10,0">
-            <TextBlock Text="User: " VerticalAlignment="Center"/>
-            <TextBox Name="SearchTextBox" Width="100"/>
-            <Button Content="Search" Height="25" Name="SearchButton" Margin="5,0,0,0"/>
-        </StackPanel>
-
-        <!--<ScrollViewer Grid.Row="4">-->
-            <DataGrid ScrollViewer.CanContentScroll="True"  ScrollViewer.HorizontalScrollBarVisibility="Auto" Grid.Row="4" IsReadOnly="True" ColumnWidth="*" HorizontalAlignment="Stretch" Name="DataGrid" AutoGenerateColumns="True" SelectionMode="Single" Margin="10,10,10,0"/>
-        <!--</ScrollViewer>-->
-        <TextBlock Name="CountTextBlock" Grid.Column="0" Grid.ColumnSpan="4" Grid.Row="5" Margin="0,0,10,2" HorizontalAlignment="Right"/>
-        <StackPanel Grid.Column="0" HorizontalAlignment="Center" Grid.Row="6" Orientation="Horizontal">
-            <ToggleButton Content="Ok" Width="60" Height="25" Name="OkButton" Margin="10"/>
-            <Button Content="Cancel" Width="60" Height="25" Name="CancelButton" Margin="10"/>
-        </StackPanel>
-
     </Grid>
 </Window>
 
@@ -2210,7 +2489,7 @@ Show-MainWindow
 #                                                                     #
 # Merged by user: todag                                               #
 # On computer:    HV-CL01                                             #
-# Date:           2021-02-16 20:28:01                                 #
+# Date:           2021-02-16 23:02:36                                 #
 # No code signing certificate found!                                  #
 #                                                                     #
 #######################################################################

@@ -59,14 +59,16 @@ function Show-MainWindow(){
 
     $MainWindow.btnShowEnrollWindow.Add_Click({
         if(Check-ValidCardIsSelected) {
-           $result = Show-EnrollWindow -Card $MainWindow.lstReaders.SelectedItem
+            Show-EnrollWindow -Card $MainWindow.lstReaders.SelectedItem
         }
     })
 
+    $MainWindow.btnShowRequestToFileWindow.Add_Click({
+        Show-RequestToFileWindow -Card $MainWindow.lstReaders.SelectedItem
+    })
+
     $MainWindow.btnShowRequestPendingWindow.Add_Click({
-        if(Check-ValidCardIsSelected) {
-            Show-RequestPendingWindow -Card $MainWindow.lstReaders.SelectedItem
-        }
+        Show-RequestPendingWindow -Card $MainWindow.lstReaders.SelectedItem
     })
 
     $MainWindow.btnChangePin.Add_Click({

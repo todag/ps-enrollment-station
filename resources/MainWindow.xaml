@@ -19,6 +19,9 @@
         <Geometry x:Key="retrieveIcon">M20 4H4C2.9 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 14.91 14.41 12 18 12C19.5 12 20.9 12.53 22 13.4V6C22 4.89 21.11 4 20 4M20 11H4V8H20V11M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
         <Geometry x:Key="retrieveIcon2">M20 4H4C2.89 4 2 4.89 2 6V18C2 19.11 2.9 20 4 20H11.68C11.57 19.5 11.5 19 11.5 18.5C11.5 18.33 11.5 18.17 11.53 18H4V12H20V12.32C20.74 12.56 21.41 12.93 22 13.4V6C22 4.89 21.1 4 20 4M20 8H4V6H20V8M20.83 15.67L22 14.5V18.5H18L19.77 16.73C19.32 16.28 18.69 16 18 16C16.62 16 15.5 17.12 15.5 18.5S16.62 21 18 21C18.82 21 19.54 20.61 20 20H21.71C21.12 21.47 19.68 22.5 18 22.5C15.79 22.5 14 20.71 14 18.5S15.79 14.5 18 14.5C19.11 14.5 20.11 14.95 20.83 15.67Z</Geometry>
 
+        <Geometry x:Key="requestToFileIcon">M11 16A1 1 0 1 1 10 15A1 1 0 0 1 11 16M20 8V20A2 2 0 0 1 18 22H6A2 2 0 0 1 4 20V4A2 2 0 0 1 6 2H14M17 15H12.83A3 3 0 1 0 12.83 17H14V19H16V17H17M18.5 9L13 3.5V9Z</Geometry>
+        <Geometry x:Key="requestToFileIcon2">M14 2H6A2 2 0 0 0 4 4V20A2 2 0 0 0 6 22H18A2 2 0 0 0 20 20V8L14 2M18 20H6V4H13V9H18M12.83 15A3 3 0 1 0 12.83 17H14V19H16V17H17V15M10 17A1 1 0 1 1 11 16A1 1 0 0 1 10 17Z</Geometry>
+
 
         <!-- ModernUI Icons Icons -->
         <Geometry x:Key="consoleIcon">F1 M 17,20L 59,20L 59,56L 17,56L 17,20 Z M 20,26L 20,53L 56,53L 56,26L 20,26 Z M 23.75,31L 28.5,31L 33.25,37.5L 28.5,44L 23.75,44L 28.5,37.5L 23.75,31 Z </Geometry>
@@ -89,8 +92,6 @@
                 <Path Margin="2" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource consoleIcon}"/>
             </ToggleButton>
         </StackPanel>
-
-
 
         <GroupBox Grid.Column="0" Grid.Row="1" Margin="10">
             <GroupBox.Header>
@@ -392,7 +393,13 @@
                     <Button Name="btnShowEnrollWindow" Margin="4">
                         <StackPanel Orientation="Horizontal" Width="150">
                             <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource requestIcon}"/>
-                            <TextBlock Text="Enroll certificate"/>
+                            <TextBlock Text="Request to card"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Name="btnShowRequestToFileWindow" Margin="4">
+                        <StackPanel Orientation="Horizontal" Width="150">
+                            <Path Height="16" Width="16" Margin="0,0,4,0" Stretch="Uniform" Fill="{StaticResource iconColor}" Data="{StaticResource requestToFileIcon}"/>
+                            <TextBlock Text="Request to file"/>
                         </StackPanel>
                     </Button>
                     <Button Name="btnShowRequestPendingWindow" Margin="4">
