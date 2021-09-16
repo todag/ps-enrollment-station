@@ -128,7 +128,7 @@ function Generate-Key() {
        [Parameter(Mandatory=$true)]  [string]$Slot,
        [Parameter(Mandatory=$true)]  [string]$OutputFile
     )
-    Execute -ExeFile $script:ykman -desc "Generating $KeyAlgo key in slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-key -P $Pin -m $mgmtKey -a $KeyAlgo --pin-policy $PinPolicy --touch-policy $TouchPolicy $slot $OutputFile"
+    Execute -ExeFile $script:ykman -desc "Generating $KeyAlgo key in slot $Slot" -arguments "--device $($Card.SerialNumber) piv keys generate -P $Pin -m $mgmtKey -a $KeyAlgo --pin-policy $PinPolicy --touch-policy $TouchPolicy $slot $OutputFile"
 }
 
 function Generate-Csr() {
@@ -157,7 +157,7 @@ function Generate-Csr() {
         [Parameter(Mandatory=$true)] [string]$OutputFile
 
     )
-    Execute -ExeFile $script:ykman -desc "Generating CSR from slot $Slot" -arguments "--device $($Card.SerialNumber) piv generate-csr -P $pin -s $subject $slot $PubKeyFile $OutputFile"
+    Execute -ExeFile $script:ykman -desc "Generating CSR from slot $Slot" -arguments "--device $($Card.SerialNumber) piv certificates request -P $pin -s $subject $slot $PubKeyFile $OutputFile"
 }
 
 function Reset-Piv() {
@@ -184,7 +184,7 @@ function Set-Mode() {
         [Parameter(Mandatory=$true)]  [PSCustomObject]$Card,
         [Parameter(Mandatory=$true)]  [string]$Mode
     )
-     Execute -ExeFile $script:ykman -desc "Setting mode to $Mode" -arguments "--device $($Card.SerialNumber) mode $Mode -f"
+     Execute -ExeFile $script:ykman -desc "Setting mode to $Mode" -arguments "--device $($Card.SerialNumber) config mode $Mode -f"
 }
 
 function Set-Pin() {
@@ -203,7 +203,7 @@ function Set-Pin() {
         [Parameter(Mandatory=$true)][string]$CurrentPin,
         [Parameter(Mandatory=$true)][string]$NewPin
     )
-    Execute -ExeFile $script:ykman -desc "Setting PIN code" -arguments "--device $($Card.SerialNumber) piv change-pin -P $CurrentPin -n $NewPin"
+    Execute -ExeFile $script:ykman -desc "Setting PIN code" -arguments "--device $($Card.SerialNumber) piv access change-pin -P $CurrentPin -n $NewPin"
 }
 function Set-Puk() {
     <#
@@ -221,7 +221,7 @@ function Set-Puk() {
         [Parameter(Mandatory=$true)][string]$CurrentPuk,
         [Parameter(Mandatory=$true)][string]$NewPuk
     )
-    Execute -ExeFile $script:ykman -desc "Setting PUK code" -arguments "--device $($Card.SerialNumber) piv change-puk -p $CurrentPuk -n $NewPuk"
+    Execute -ExeFile $script:ykman -desc "Setting PUK code" -arguments "--device $($Card.SerialNumber) piv access change-puk -p $CurrentPuk -n $NewPuk"
 }
 
 function Unblock-Pin() {
@@ -279,7 +279,7 @@ function Reset-Chuid() {
        [Parameter(Mandatory=$true)]  [string]$Pin,
        [Parameter(Mandatory=$false)] [string]$MgmtKey = "010203040506070801020304050607080102030405060708"
     )
-    Execute -ExeFile $script:ykman -desc "Resetting CHUID" -arguments "--device $($Card.SerialNumber) piv set-chuid -P $pin -m $mgmtKey"
+    Execute -ExeFile $script:ykman -desc "Resetting CHUID" -arguments "--device $($Card.SerialNumber) piv objects generate chuid -P $pin -m $mgmtKey"
 }
 
 function Import-Certificate() {
@@ -321,5 +321,5 @@ function Import-Certificate() {
         Set-Content "$($script:workDir)\$($Card.SerialNumber).$Slot.crt" -Value $CertBase64
         $CertFile = "$($script:workDir)\$($Card.SerialNumber).$Slot.crt"
     }
-    Execute -ExeFile $script:ykman -desc "Importing certificate to slot $Slot" -arguments "--device $($Card.SerialNumber) piv import-certificate -P $pin -m $mgmtKey -v $slot $CertFile"
+    Execute -ExeFile $script:ykman -desc "Importing certificate to slot $Slot" -arguments "--device $($Card.SerialNumber) piv certificates import -P $pin -m $mgmtKey -v $slot $CertFile"
 }

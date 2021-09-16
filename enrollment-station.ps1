@@ -1,5 +1,5 @@
 Set-StrictMode -Version 2.0
-$appVersion = "0.3 - 2020-02-16"
+$appVersion = "0.3.1 - 2021-09-16"
 $appAbout = @"
 Enrollment Station v $($appVersion)
 

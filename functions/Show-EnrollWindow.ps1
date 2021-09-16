@@ -14,7 +14,7 @@ function Show-EnrollWindow(){
 
     $Win.cmbTemplates.ItemsSource = Get-CertificateTemplates
     $Win.cmbSigningCerts.ItemsSource = Get-SigningCertificates
-    $Win.txtSubject.Text = "/CN=$($env:Username)/"
+    $Win.txtSubject.Text = "$($env:Username)"
 
     $Win.btnShowFindUsersWindow.Add_Click({
         $selectedUser = (Show-FindUsersWindow)
